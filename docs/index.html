@@ -109,6 +109,13 @@ input[type=range]{width:100%;accent-color:var(--accent)}
 .cross::before,.cross::after{content:"";position:absolute;background:#fff;mix-blend-mode:difference}
 .cross::before{left:6px;top:0;width:2px;height:14px}.cross::after{top:6px;left:0;height:2px;width:14px}
 .walkinfo{position:absolute;left:50%;top:calc(50% + 18px);transform:translateX(-50%);font-size:12px;background:rgba(20,22,21,.75);color:#fff;padding:3px 8px;border-radius:5px;pointer-events:none;white-space:nowrap}
+.sunbar{position:absolute;left:10px;right:60px;bottom:10px;display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;background:color-mix(in srgb, var(--panel) 92%, transparent);border:1px solid var(--line);border-radius:8px;padding:6px 10px}
+.sunbar input[type=range]{flex:1;min-width:140px}
+.sunbar input[type=date]{width:auto;font-size:12px;padding:3px 6px}
+.sunbar .si{font-family:var(--f-mono);font-size:11.5px;font-variant-numeric:tabular-nums;color:var(--ink);white-space:nowrap}
+.stage.sun-on .hud{bottom:auto;top:10px}
+.stage.sun-on .walkhelp{bottom:64px}
+.stage.sun-on .dpad{bottom:110px}
 .walkhelp{position:absolute;inset:auto 10px 10px 10px;display:flex;justify-content:center;pointer-events:none}
 .walkhelp div{background:rgba(20,22,21,.72);color:#f2f2ef;padding:6px 10px;border-radius:6px;font-size:12px;text-align:center}
 .walkhelp kbd{font-family:var(--f-mono);font-size:10.5px;border:1px solid rgba(255,255,255,.35);border-radius:3px;padding:0 4px}
@@ -189,6 +196,27 @@ input[type=range]{width:100%;accent-color:var(--accent)}
       </section>
 
       <section class="sec">
+        <h3>Sol och ljus <span class="pill" id="sunPill">av</span></h3>
+        <label class="f inline"><input type="checkbox" id="sunOn"> Simulera solljuset genom fönstren</label>
+        <div class="grid2">
+          <label class="f">Ort<select id="sunPlace"></select></label>
+          <label class="f">Norr (° medurs från uppåt)<input type="number" id="sunNorth" step="1"></label>
+        </div>
+        <div class="grid2" id="sunLatLon">
+          <label class="f">Latitud<input type="number" id="sunLat" step="0.01" min="-89" max="89"></label>
+          <label class="f">Longitud<input type="number" id="sunLon" step="0.01" min="-180" max="180"></label>
+        </div>
+        <div class="hint">Vrid kompassen uppe till höger i planen tills <b>N</b> pekar mot norr, eller skriv in gradtalet. På en planritning finns ofta en nordpil.</div>
+        <div class="row">
+          <button class="btn small" data-sunday="12-21">Midvinter</button>
+          <button class="btn small" data-sunday="03-20">Vårdagjämning</button>
+          <button class="btn small" data-sunday="06-21">Midsommar</button>
+          <button class="btn small" data-sunday="today">Idag</button>
+        </div>
+        <div class="status" id="sunRise"></div>
+      </section>
+
+      <section class="sec">
         <h3>Skapa möbel <span class="pill" id="aiPill">Claude: ansluter…</span></h3>
         <textarea id="aiText" placeholder="t.ex. tresitssoffa 218x80x80 #696964&#10;eller: garderob 80x60x200 vit"></textarea>
         <div class="row">
@@ -252,6 +280,12 @@ input[type=range]{width:100%;accent-color:var(--accent)}
       <div class="cross" id="cross" hidden></div>
       <div class="walkinfo" id="walkInfo" hidden></div>
       <div class="walkhelp" id="walkHelp" hidden><div id="walkHelpText"></div></div>
+      <div class="sunbar" id="sunbar" hidden>
+        <button class="btn small" id="sunPlay" aria-label="Spela upp dagen">▶</button>
+        <input type="range" id="sunTime" min="0" max="24" step="0.0833" aria-label="Klockslag">
+        <span class="si" id="sunInfo"></span>
+        <input type="date" id="sunDate" aria-label="Datum">
+      </div>
       <div class="dpad" id="dpad">
         <span></span><button data-k="KeyW">▲</button><span></span>
         <button data-k="KeyA">◀</button><button data-k="KeyS">▼</button><button data-k="KeyD">▶</button>
@@ -496,7 +530,7 @@ function defaultState(){
   const st = { app:'hemplan3d', version:1, name:'Exempellägenhet', walls, openings, furniture:[], library:[],
     viewer:{ x:400, y:580, a:-90 },
     settings:{ eye:170, snap:5, floor:'#c8a273', wall:'#f3f1ec', ceiling:true, collide:true, dims:true, defT:12, defH:250 },
-    underlay:null, north:0, floorPaint:[] };
+    underlay:null, north:0, floorPaint:[], sun:defaultSun() };
   const add = (def, x, y, rot, j) => { const f = makeInstance(def, x, y, rot); if (j) f.j = j; st.furniture.push(f); };
   add(genSofa(218,90,82,3,14,'#696964'), 240, 58, 0);
   add(genRug(200,140,'#d8cfc0'), 240, 175, 0);
@@ -519,6 +553,7 @@ function normalizeState(o){
   o.library = Array.isArray(o.library) ? o.library : [];
   o.settings = Object.assign({}, d.settings, o.settings || {});
   o.viewer = Object.assign({}, d.viewer, o.viewer || {});
+  o.sun = Object.assign(defaultSun(), o.sun || {}); o.north = Number.isFinite(+o.north) ? +o.north : 0;
   o.furniture.forEach(f => { f.j = f.j || {}; f.elev = f.elev || 0; });
   return o;
 }
@@ -574,7 +609,7 @@ function wallsBBox(){
 }
 
 /* ============================== 3D ============================== */
-let renderer = null, scene, cam, wallsG, furnG, floorMesh, ceilMesh, hemi, dirL, ok3d = true;
+let renderer = null, scene, cam, wallsG, furnG, floorMesh, ceilMesh, hemi, dirL, ambientL, ok3d = true;
 const furnObjs = new Map();
 const matCache = new Map();
 function mat(hex, o = 1){
@@ -598,15 +633,17 @@ function init3D(){
   scene = new THREE.Scene();
   cam = new THREE.PerspectiveCamera(60, 1, 5, 30000);
   hemi = new THREE.HemisphereLight(0xffffff, 0x8a7a66, 0.75); scene.add(hemi);
-  scene.add(new THREE.AmbientLight(0xffffff, 0.18));
+  ambientL = new THREE.AmbientLight(0xffffff, 0.18); scene.add(ambientL);
   dirL = new THREE.DirectionalLight(0xffffff, 0.55);
   dirL.castShadow = true; dirL.shadow.mapSize.set(2048, 2048); dirL.shadow.bias = -0.0005;
   scene.add(dirL); scene.add(dirL.target);
   wallsG = new THREE.Group(); furnG = new THREE.Group(); scene.add(wallsG, furnG);
   floorMesh = new THREE.Mesh(new THREE.PlaneGeometry(1,1), mat('#c8a273')); floorMesh.rotation.x = -Math.PI/2; floorMesh.receiveShadow = true; scene.add(floorMesh);
-  ceilMesh = new THREE.Mesh(new THREE.PlaneGeometry(1,1), mat('#fbfaf7')); ceilMesh.rotation.x = Math.PI/2; scene.add(ceilMesh);
+  ceilMesh = new THREE.Mesh(new THREE.BoxGeometry(1,10,1), mat('#fbfaf7')); scene.add(ceilMesh);
+  dirL.shadow.normalBias = 0.6;
 }
-function setSky(){ if (scene) scene.background = new THREE.Color(css('--sky') || '#dce3e6'); }
+function setSky(){ if (scene && !S?.sun?.on) scene.background = new THREE.Color(css('--sky') || '#dce3e6'); }
+let scene3d = { cx:450, cy:350, W:900, H:700 };
 
 const doorGroups = new Map();
 function buildWalls(){
@@ -662,10 +699,9 @@ function buildWalls(){
     if (cur < g.len + ext.b) seg(g.len + ext.b - cur, cur, 0, w.h);
   });
   const bb = wallsBBox(), cx = (bb.minx+bb.maxx)/2, cy = (bb.miny+bb.maxy)/2, W = bb.maxx-bb.minx, H = bb.maxy-bb.miny;
-  ceilMesh.scale.set(W, H, 1); ceilMesh.position.set(cx, maxH || 250, cy);
-  dirL.position.set(cx - W*0.25, 900, cy - H*0.35); dirL.target.position.set(cx, 0, cy);
-  const r = Math.max(W, H) * 0.75;
-  Object.assign(dirL.shadow.camera, { left:-r, right:r, top:r, bottom:-r, near:10, far:3000 }); dirL.shadow.camera.updateProjectionMatrix();
+  ceilMesh.scale.set(W, 1, H); ceilMesh.position.set(cx, (maxH || 250) + 3, cy);
+  scene3d = { cx, cy, W, H };
+  updateSun();
   scheduleFloor();
 }
 const doorDir = (w, side, along, open) => { const g = wg(w), th = clamp(open ?? 1, 0, 1)*Math.PI/2; return { x: Math.cos(th)*g.ux*along + Math.sin(th)*g.nx*side, y: Math.cos(th)*g.uy*along + Math.sin(th)*g.ny*side }; };
@@ -968,6 +1004,9 @@ function drawPlan(){
   ctx.beginPath(); ctx.arc(0, 0, 8, 0, 7); ctx.fillStyle = col.accent; ctx.fill(); ctx.strokeStyle = col.paper; ctx.lineWidth = 2; ctx.stroke();
   ctx.beginPath(); ctx.moveTo(13, 0); ctx.lineTo(6, -5); ctx.lineTo(6, 5); ctx.closePath(); ctx.fillStyle = col.accent; ctx.fill();
   ctx.restore();
+  // sunlit floor (approximate) + compass
+  if (S.sun.on) drawSunPatches(ctx, col);
+  drawCompass(ctx, col, W);
   // HUD
   $('#hud').textContent = (cursorW ? `x ${fmt(cursorW.x)}  y ${fmt(cursorW.y)}   ` : '') + `rutnät ${minor} cm`;
 }
@@ -1028,6 +1067,7 @@ planCv.addEventListener('pointerdown', e => {
   const p = evW(e); cursorW = p;
   const start = { px:p.px, py:p.py, x:p.x, y:p.y, moved:false, undo:false };
   if (e.button === 1 || e.button === 2 || (e.button === 0 && spaceDown)){ drag = { kind:'pan', ...start, cx:pv.cx, cy:pv.cy }; return; }
+  { const c = compassPos(); if (Math.hypot(p.px - c.x, p.py - c.y) < c.r + 6){ drag = { kind:'north', ...start }; return; } }
   if (tool === 'room'){ const a = snapPt(p); roomDraw = { a, b:a }; drag = { kind:'room', ...start }; return; }
   if (tool === 'ulmove' && S.underlay){ drag = { kind:'ulmove', ...start, ox:S.underlay.x, oy:S.underlay.y }; return; }
   if (tool !== 'select'){ drag = { kind:'click', ...start, cx:pv.cx, cy:pv.cy }; return; }
@@ -1065,6 +1105,7 @@ planCv.addEventListener('pointermove', e => {
     case 'furn': { once(); const f = drag.f; f.x = r1(drag.ox + (p.x - drag.x)); f.y = r1(drag.oy + (p.y - drag.y)); if (!e.altKey){ f.x = Math.round(f.x); f.y = Math.round(f.y); } updateFurnPose(f); break; }
     case 'rot': { once(); const f = drag.f; let a = deg(Math.atan2(p.y - f.y, p.x - f.x)) - 90; const st = e.altKey ? 1 : (e.shiftKey ? 45 : 15); f.rot = ((Math.round(a/st)*st) % 360 + 360) % 360; updateFurnPose(f); break; }
     case 'viewer': S.viewer.x = r1(drag.ox + (p.x - drag.x)); S.viewer.y = r1(drag.oy + (p.y - drag.y)); break;
+    case 'north': { once(); const c = compassPos(); let a = deg(Math.atan2(p.px - c.x, -(p.py - c.y))); const st = e.altKey ? 1 : 5; S.north = ((Math.round(a/st)*st) % 360 + 360) % 360; $('#sunNorth').value = S.north; updateSun(); break; }
     case 'open': { once(); const G = wg(drag.w); const r = segDist(p, drag.w.a, drag.w.b); drag.o.off = clamp(Math.round(r.s/ (e.altKey?1:g))*(e.altKey?1:g), drag.o.w/2, G.len - drag.o.w/2); buildWalls(); break; }
     case 'end': { once(); const q = snapPt(p, { exclude:drag.pts, from:(drag.w.a === drag.pts[0] ? drag.w.b : drag.w.a), free:e.altKey }); drag.pts.forEach(pt => { pt.x = q.x; pt.y = q.y; }); S.walls.forEach(clampOpenings); buildWalls(); break; }
     case 'wall': { once(); let dx = p.x - drag.x, dy = p.y - drag.y; if (!e.altKey){ dx = Math.round(dx/g)*g; dy = Math.round(dy/g)*g; } drag.pts.forEach(o => { o.q.x = r1(o.x + dx); o.q.y = r1(o.y + dy); }); S.walls.forEach(clampOpenings); buildWalls(); break; }
@@ -1089,7 +1130,7 @@ function endDrag(e){
       buildWalls(); changed();
     }
   }
-  if (d.moved && ['furn','rot','end','wall','open','viewer','ulmove'].includes(d.kind)){ changed(); renderInspector(); }
+  if (d.moved && ['furn','rot','end','wall','open','viewer','ulmove','north'].includes(d.kind)){ changed(); renderInspector(); }
   reqPlan();
 }
 function snapOrRaw(p, e){ if (tool === 'wall'){ const last = wallDraw.pts[wallDraw.pts.length-1]; return snapPt(p, { from:last, free:e.altKey }); } return p; }
@@ -1399,6 +1440,145 @@ function stepAnims(dt){
   }
 }
 
+/* ============================== sun ============================== */
+const PLACES = [['Stockholm',59.33,18.07],['Göteborg',57.71,11.97],['Malmö',55.60,13.00],['Uppsala',59.86,17.64],['Linköping',58.41,15.62],['Örebro',59.27,15.21],['Västerås',59.61,16.55],['Jönköping',57.78,14.16],['Karlstad',59.38,13.50],['Gävle',60.67,17.14],['Sundsvall',62.39,17.31],['Östersund',63.18,14.64],['Umeå',63.83,20.26],['Luleå',65.58,22.15],['Kiruna',67.86,20.23],['Visby',57.64,18.29]];
+function todayStr(){ const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0'); }
+function defaultSun(){ return { on:false, place:'Stockholm', lat:59.33, lon:18.07, date:todayStr(), time:14 }; }
+let sunPlaying = false, sunNow = null;
+// Swedish time: CET, CEST between the last Sunday of March and the last Sunday of October (01:00 UTC)
+function lastSunday(y, m){ const d = new Date(Date.UTC(y, m+1, 0)); d.setUTCDate(d.getUTCDate() - d.getUTCDay()); return d; }
+function swedishToUTC(dateStr, hours){
+  const [y, mo, da] = dateStr.split('-').map(Number);
+  const base = Date.UTC(y, mo-1, da) + hours*3600000;
+  const dstStart = lastSunday(y, 2).getTime() + 3600000, dstEnd = lastSunday(y, 9).getTime() + 3600000;
+  const guess = base - 3600000; // assume CET
+  return (guess >= dstStart && guess < dstEnd) ? base - 7200000 : guess;
+}
+function sunPosition(ms, lat, lon){
+  const d = ms/86400000 - 10957.5, g = rad(357.529 + 0.98560028*d);
+  const L = 280.459 + 0.98564736*d, lam = rad(L + 1.915*Math.sin(g) + 0.020*Math.sin(2*g)), eps = rad(23.439 - 0.00000036*d);
+  const ra = Math.atan2(Math.cos(eps)*Math.sin(lam), Math.cos(lam)), dec = Math.asin(Math.sin(eps)*Math.sin(lam));
+  const gmst = 18.697374558 + 24.06570982441908*d, H = rad(((gmst*15 + lon) % 360)) - ra, phi = rad(lat);
+  const el = Math.asin(Math.sin(phi)*Math.sin(dec) + Math.cos(phi)*Math.cos(dec)*Math.cos(H));
+  const az = Math.atan2(-Math.cos(dec)*Math.sin(H), Math.sin(dec)*Math.cos(phi) - Math.cos(dec)*Math.cos(H)*Math.sin(phi));
+  return { el:deg(el), az:((deg(az) % 360) + 360) % 360 };
+}
+const compass8 = a => ['norr','nordost','öster','sydost','söder','sydväst','väster','nordväst'][Math.round(((a % 360) + 360) % 360 / 45) % 8];
+const hm = h => { const t = Math.round(clamp(h, 0, 24)*60); return String(Math.floor(t/60) % 24).padStart(2,'0') + ':' + String(t % 60).padStart(2,'0'); };
+// direction toward the sun in plan coordinates (y down), given azimuth (clockwise from north)
+function sunPlanDir(az){ const a = rad(S.north + az); return { x:Math.sin(a), y:-Math.cos(a) }; }
+const ceilGhost = new THREE.MeshBasicMaterial({ colorWrite:false, depthWrite:false });
+function applyCeiling(){
+  if (!ok3d) return;
+  const real = view === 'walk' && S.settings.ceiling, sun = S.sun.on;
+  ceilMesh.visible = real || sun; ceilMesh.material = real ? mat('#fbfaf7') : ceilGhost; ceilMesh.castShadow = sun;
+}
+function updateSun(){
+  const sn = S.sun;
+  sunNow = sn.on ? sunPosition(swedishToUTC(sn.date, sn.time), sn.lat, sn.lon) : null;
+  $('#sunbar').hidden = !sn.on; stage.classList.toggle('sun-on', sn.on);
+  $('#sunPill').textContent = sn.on ? 'på' : 'av'; $('#sunPill').classList.toggle('on', sn.on);
+  if (sn.on){
+    $('#sunTime').value = sn.time; $('#sunDate').value = sn.date;
+    $('#sunInfo').textContent = `kl ${hm(sn.time)} · ` + (sunNow.el > 0 ? `solen ${Math.round(sunNow.el)}° i ${compass8(sunNow.az)}` : 'solen är nere');
+  }
+  if (ok3d){
+    const { cx, cy, W, H } = scene3d;
+    if (sn.on){
+      const el = sunNow.el, day = clamp((el + 6)/12, 0, 1), up = clamp(el/25, 0, 1), dir = sunPlanDir(sunNow.az);
+      const ce = Math.cos(rad(Math.max(el, 0.5))), se = Math.sin(rad(Math.max(el, 0.5)));
+      const r = Math.hypot(W, H)/2 + 60;
+      dirL.position.set(cx + dir.x*ce*3000, se*3000, cy + dir.y*ce*3000); dirL.target.position.set(cx, 0, cy);
+      Object.assign(dirL.shadow.camera, { left:-r, right:r, top:r, bottom:-r, near:100, far:6500 }); dirL.shadow.camera.updateProjectionMatrix();
+      dirL.intensity = el > 0 ? 0.6 + 1.5*clamp(el/15, 0, 1) : 0;
+      dirL.color.setRGB(1, 0.72 + 0.26*up, 0.48 + 0.44*up);
+      hemi.intensity = 0.16 + 0.5*day; ambientL.intensity = 0.06 + 0.06*day;
+      const night = new THREE.Color('#141b2b'), dusk = new THREE.Color('#e3a77c'), sky = new THREE.Color('#9cc3e4');
+      scene.background = el < -6 ? night : el < 0 ? night.clone().lerp(dusk, (el + 6)/6) : el < 10 ? dusk.clone().lerp(sky, el/10) : sky;
+    } else {
+      dirL.position.set(cx - W*0.25, 900, cy - H*0.35); dirL.target.position.set(cx, 0, cy);
+      const r = Math.max(W, H)*0.75;
+      Object.assign(dirL.shadow.camera, { left:-r, right:r, top:r, bottom:-r, near:10, far:3000 }); dirL.shadow.camera.updateProjectionMatrix();
+      dirL.intensity = 0.55; dirL.color.setRGB(1,1,1); hemi.intensity = 0.75; ambientL.intensity = 0.18; setSky();
+    }
+    applyCeiling();
+  }
+  reqPlan();
+}
+function sunRiseSet(){
+  const sn = S.sun; let rise = null, set = null, prev = null, maxEl = -90;
+  for (let h = 0; h <= 24.001; h += 1/12){
+    const el = sunPosition(swedishToUTC(sn.date, h), sn.lat, sn.lon).el; maxEl = Math.max(maxEl, el);
+    if (prev !== null){ if (prev < -0.833 && el >= -0.833 && rise === null) rise = h; if (prev >= -0.833 && el < -0.833) set = h; }
+    prev = el;
+  }
+  const t = $('#sunRise');
+  if (rise === null && set === null) t.textContent = maxEl > 0 ? 'Midnattssol: solen går inte ned.' : 'Polarnatt: solen går inte upp.';
+  else t.textContent = `Soluppgång ${rise !== null ? hm(rise) : 'före 00:00'} · nedgång ${set !== null ? hm(set) : 'efter 24:00'} · högst ${Math.round(maxEl)}°`;
+}
+// approximate sunlit floor: each outer window projected along the sun ray onto the floor
+function drawSunPatches(ctx, col){
+  if (!sunNow || sunNow.el <= 1) return;
+  const dir = sunPlanDir(sunNow.az), k = 1/Math.tan(rad(sunNow.el));
+  const r = getRaster(); if (!r) return;
+  r.outside = r.outside || {};
+  ctx.save(); ctx.fillStyle = 'rgba(255,196,64,0.38)'; ctx.strokeStyle = 'rgba(214,140,20,0.7)'; ctx.lineWidth = 1;
+  S.openings.forEach(o => {
+    if (o.type !== 'window') return;
+    const w = wallById(o.wall); if (!w) return;
+    const g = wg(w), s0 = clamp(o.off - o.w/2, 0, g.len), s1 = clamp(o.off + o.w/2, 0, g.len), top = Math.min(w.h, o.sill + o.h);
+    const into = -(dir.x*g.nx + dir.y*g.ny) >= 0 ? 1 : -1; // the side light travels into
+    if (Math.abs(dir.x*g.nx + dir.y*g.ny) < 0.02) return;
+    const key = w.id + ':' + (-into);
+    if (r.outside[key] === undefined){ const off = w.t/2 + r.cell*3, sm = (s0+s1)/2; const reg = regionAt({ x:w.a.x + g.ux*sm - g.nx*into*off, y:w.a.y + g.uy*sm - g.ny*into*off }); r.outside[key] = !!(reg && reg.edge); }
+    if (!r.outside[key]) return; // sun must come from outside the apartment
+    const P = (sv, y) => { const bx = w.a.x + g.ux*sv + g.nx*into*w.t/2, by = w.a.y + g.uy*sv + g.ny*into*w.t/2; return [sx(bx - dir.x*y*k), sy(by - dir.y*y*k)]; };
+    const pts = [P(s0, o.sill), P(s1, o.sill), P(s1, top), P(s0, top)];
+    ctx.beginPath(); pts.forEach(([x, y], i) => i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)); ctx.closePath(); ctx.fill(); ctx.stroke();
+  });
+  ctx.restore();
+}
+function compassPos(){ return { x:planCv.clientWidth - 44, y:44, r:28 }; }
+function drawCompass(ctx, col, W){
+  const c = compassPos();
+  ctx.save(); ctx.translate(c.x, c.y);
+  ctx.beginPath(); ctx.arc(0, 0, c.r, 0, 7); ctx.fillStyle = col.paper; ctx.globalAlpha = .92; ctx.fill(); ctx.globalAlpha = 1; ctx.strokeStyle = col.muted; ctx.lineWidth = 1; ctx.stroke();
+  if (S.sun.on && sunNow){
+    const d = sunPlanDir(sunNow.az), up = sunNow.el > 0;
+    ctx.strokeStyle = up ? '#e0a020' : col.muted; ctx.setLineDash(up ? [] : [2,2]); ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(d.x*(c.r-4), d.y*(c.r-4)); ctx.stroke(); ctx.setLineDash([]);
+    ctx.beginPath(); ctx.arc(d.x*(c.r-4), d.y*(c.r-4), 5, 0, 7); ctx.fillStyle = up ? '#f2b630' : col.muted; ctx.fill();
+  }
+  ctx.rotate(rad(S.north));
+  ctx.beginPath(); ctx.moveTo(0, -c.r + 5); ctx.lineTo(6, 2); ctx.lineTo(0, -2); ctx.lineTo(-6, 2); ctx.closePath(); ctx.fillStyle = col.accent; ctx.fill();
+  ctx.beginPath(); ctx.moveTo(0, c.r - 7); ctx.lineTo(4, 2); ctx.lineTo(-4, 2); ctx.closePath(); ctx.fillStyle = col.muted; ctx.fill();
+  ctx.font = `600 11px ${css('--f-mono')}`; ctx.fillStyle = col.accent; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.save(); ctx.translate(0, -c.r - 9); ctx.rotate(-rad(S.north)); ctx.fillText('N', 0, 0); ctx.restore();
+  ctx.restore();
+}
+function syncSunUI(){
+  const sn = S.sun;
+  $('#sunOn').checked = sn.on; $('#sunNorth').value = S.north; $('#sunLat').value = sn.lat; $('#sunLon').value = sn.lon;
+  $('#sunPlace').innerHTML = PLACES.map(([n]) => `<option ${n === sn.place ? 'selected' : ''}>${n}</option>`).join('') + `<option value="" ${PLACES.some(p => p[0] === sn.place) ? '' : 'selected'}>Annan plats…</option>`;
+  $('#sunLatLon').hidden = PLACES.some(p => p[0] === sn.place);
+  sunRiseSet(); updateSun();
+}
+const sunChanged = (rs) => { if (rs) sunRiseSet(); updateSun(); scheduleSave(); };
+$('#sunOn').addEventListener('change', e => { S.sun.on = e.target.checked; if (!S.sun.on){ sunPlaying = false; $('#sunPlay').textContent = '▶'; } if (S.sun.on && view === 'plan') toast('Solen är på. Byt till 3D-vy eller Gå runt för att se ljuset och skuggorna.'); sunChanged(true); });
+$('#sunPlace').addEventListener('change', e => { const p = PLACES.find(q => q[0] === e.target.value); if (p){ S.sun.place = p[0]; S.sun.lat = p[1]; S.sun.lon = p[2]; } else S.sun.place = 'Annan'; syncSunUI(); scheduleSave(); });
+$('#sunLat').addEventListener('change', e => { S.sun.lat = clamp(num(e.target.value, 59.33), -89, 89); sunChanged(true); });
+$('#sunLon').addEventListener('change', e => { S.sun.lon = clamp(num(e.target.value, 18.07), -180, 180); sunChanged(true); });
+$('#sunNorth').addEventListener('change', e => { pushUndo(); S.north = ((num(e.target.value, 0) % 360) + 360) % 360; e.target.value = S.north; sunChanged(false); });
+$('#sunTime').addEventListener('input', e => { S.sun.time = num(e.target.value, 12); sunPlaying = false; $('#sunPlay').textContent = '▶'; updateSun(); scheduleSave(); });
+$('#sunDate').addEventListener('change', e => { if (/^\d{4}-\d{2}-\d{2}$/.test(e.target.value)){ S.sun.date = e.target.value; sunChanged(true); } });
+$('#sunPlay').addEventListener('click', () => { sunPlaying = !sunPlaying; if (sunPlaying && S.sun.time >= 23.9) S.sun.time = 0; $('#sunPlay').textContent = sunPlaying ? '❚❚' : '▶'; });
+document.querySelectorAll('[data-sunday]').forEach(b => b.addEventListener('click', () => {
+  const v = b.dataset.sunday, y = (S.sun.date || todayStr()).slice(0, 4);
+  S.sun.date = v === 'today' ? todayStr() : y + '-' + v;
+  if (!S.sun.on){ S.sun.on = true; $('#sunOn').checked = true; }
+  sunChanged(true);
+}));
+
 /* ============================== painting ============================== */
 let brush = '#d9d2c5';
 const WALL_SW = [['#f4f2ec','Vit'],['#ebe5d8','Benvit'],['#ddd5c6','Greige'],['#c9c6be','Ljusgrå'],['#a3a39b','Grå'],['#b8c2ad','Salvia'],['#8da1a6','Duvblå'],['#56697d','Mörkblå'],
@@ -1671,7 +1851,7 @@ $('#sEye').addEventListener('change', e => setS('eye', clamp(num(e.target.value,
 $('#sSnap').addEventListener('change', e => setS('snap', clamp(num(e.target.value, 5), 1, 50)));
 $('#sFloor').addEventListener('input', e => setS('floor', e.target.value, true));
 $('#sWall').addEventListener('input', e => setS('wall', e.target.value, true));
-$('#sCeil').addEventListener('change', e => setS('ceiling', e.target.checked));
+$('#sCeil').addEventListener('change', e => { setS('ceiling', e.target.checked); applyCeiling(); });
 $('#sCollide').addEventListener('change', e => setS('collide', e.target.checked));
 $('#sDims').addEventListener('change', e => setS('dims', e.target.checked));
 $('#projName').addEventListener('change', e => { S.name = e.target.value.slice(0, 80); changed(); renderInspector(); });
@@ -1689,7 +1869,7 @@ function setView(v){
   $('#cross').hidden = v !== 'walk'; $('#walkHelp').hidden = v !== 'walk'; $('#walkInfo').hidden = true;
   $('#dpad').classList.toggle('show', v === 'walk');
   if (v !== 'plan'){ resize3D(); setSky(); }
-  if (ok3d){ ceilMesh.visible = v === 'walk' && S.settings.ceiling; cam.fov = v === 'walk' ? 72 : 55; cam.updateProjectionMatrix(); }
+  if (ok3d){ applyCeiling(); cam.fov = v === 'walk' ? 72 : 55; cam.updateProjectionMatrix(); }
   if (v === '3d'){ const bb = wallsBBox(); orbit.tx = (bb.minx+bb.maxx)/2; orbit.tz = (bb.miny+bb.maxy)/2; orbit.dist = Math.max(bb.maxx-bb.minx, bb.maxy-bb.miny)*1.25 + 200; }
   walkHelp(); showTip(); reqPlan();
 }
@@ -1993,7 +2173,7 @@ window.addEventListener('hashchange', checkHash);
 
 /* ============================== boot ============================== */
 function afterLoad(fit){
-  rebuildAll(); syncSettingsUI(); renderTools(); renderLibrary(); renderInspector(); renderSwatches(); updUndo();
+  rebuildAll(); syncSettingsUI(); renderTools(); renderLibrary(); renderInspector(); renderSwatches(); syncSunUI(); updUndo();
   if (fit) fitPlan();
 }
 let last = performance.now();
@@ -2001,6 +2181,7 @@ function loop(t){
   requestAnimationFrame(loop);
   const dt = Math.min(0.05, (t - last)/1000); last = t;
   stepAnims(dt);
+  if (sunPlaying){ S.sun.time += dt*1.2; if (S.sun.time >= 24){ S.sun.time = 24; sunPlaying = false; $('#sunPlay').textContent = '▶'; scheduleSave(); } updateSun(); }
   if (view !== 'plan' && ok3d){ if (view === 'walk') stepWalk(dt); else stepOrbit(); renderer.render(scene, cam); }
   if (planDirty && view === 'plan') drawPlan();
 }
