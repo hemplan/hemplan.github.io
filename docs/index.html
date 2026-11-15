@@ -66,9 +66,18 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
 .tool.wide{grid-auto-flow:column;justify-content:center;gap:6px;align-items:center;font-size:12px}
 .tool.wide svg{width:16px;height:16px}
 .panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:auto;min-height:0}
-.sec{padding:12px 14px;border-bottom:1px solid var(--line);display:grid;gap:8px}
+.sec{padding:12px 14px;border-bottom:1px solid var(--line);display:grid;grid-template-columns:minmax(0,1fr);gap:8px}
+.sec > *{min-width:0}
 .sec:last-child{border-bottom:0}
-.sec h3{margin:0;font-family:var(--f-cond);font-size:11.5px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);display:flex;justify-content:space-between;align-items:center}
+.sec h3{margin:0;font-family:var(--f-cond);font-size:11.5px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);display:flex;justify-content:flex-start;gap:6px;align-items:center}
+.sec h3 .pill{margin-left:auto}
+.sec > h3.tg{cursor:pointer;user-select:none;border-radius:4px}
+.sec > h3.tg:hover{color:var(--ink)}
+.sec > h3.tg::before{content:"";width:0;height:0;border-left:4px solid transparent;border-right:4px solid transparent;border-top:5px solid currentColor;transition:transform .15s;flex:none}
+.sec.collapsed > h3.tg::before{transform:rotate(-90deg)}
+.sec.collapsed > :not(h3){display:none!important}
+.sec.collapsed{padding-block:10px}
+.dpad .act{font-size:12px;font-weight:600}
 .tools{display:grid;grid-template-columns:repeat(4,1fr);gap:4px}
 .tool{display:grid;justify-items:center;gap:2px;padding:7px 2px 5px;border:1px solid var(--line);border-radius:var(--r);background:var(--field);color:var(--ink);font:inherit;font-size:11px;cursor:pointer}
 .tool svg{width:20px;height:20px}
@@ -89,14 +98,19 @@ input[type=range]{width:100%;accent-color:var(--accent)}
 .status.err{color:var(--danger)}
 .pill{font-family:var(--f-mono);font-size:10px;padding:1px 6px;border-radius:99px;border:1px solid var(--line);color:var(--muted);text-transform:none;letter-spacing:0}
 .pill.on{border-color:var(--accent);color:var(--accent)}
-.lib{display:grid;gap:2px}
-.lib .item{display:flex;align-items:center;gap:8px;padding:5px 6px;border-radius:var(--r);cursor:pointer;border:1px solid transparent;background:transparent;color:var(--ink);font:inherit;text-align:left;width:100%}
+.lib{display:grid;grid-template-columns:minmax(0,1fr);gap:2px;min-width:0}
+.lib .item{display:flex;align-items:center;gap:6px;min-width:0;padding:5px 6px;border-radius:var(--r);cursor:pointer;border:1px solid transparent;background:transparent;color:var(--ink);font:inherit;text-align:left;width:100%}
 .lib .item:hover{background:var(--field);border-color:var(--line)}
 .lib .sw{width:14px;height:14px;border-radius:3px;border:1px solid var(--line);flex:none}
 .lib .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.lib .dm{font-family:var(--f-mono);font-size:10.5px;color:var(--muted)}
+.lib .dm{font-family:var(--f-mono);font-size:10.5px;color:var(--muted);flex:none;white-space:nowrap}
+.lib .ed,.lib .x{flex:none}
+.srclink{font-size:12px;word-break:break-all}
 .lib .x{border:0;background:transparent;color:var(--muted);cursor:pointer;font-size:14px;padding:0 4px}
 .lib .tag{font-size:10px;color:var(--accent)}
+.lib .ed{border:0;background:transparent;color:var(--muted);cursor:pointer;font-size:13px;padding:0 3px}
+.lib .ed:hover,.lib .x:hover{color:var(--ink)}
+.lib .sub{font-size:11px;color:var(--muted);margin:6px 0 2px;display:flex;justify-content:space-between;gap:6px}
 
 .stage{position:relative;border-radius:10px;overflow:hidden;border:1px solid var(--line);background:var(--paper);min-height:0}
 .stage canvas{position:absolute;inset:0;width:100%;height:100%;display:block;touch-action:none}
@@ -214,23 +228,34 @@ input[type=range]{width:100%;accent-color:var(--accent)}
           <button class="btn small" data-sunday="today">Idag</button>
         </div>
         <div class="status" id="sunRise"></div>
+        <div class="row">
+          <button class="btn small" id="bEvening">Kvällsläge</button>
+          <button class="btn small" id="bLampsOn">Tänd alla lampor</button>
+          <button class="btn small" id="bLampsOff">Släck alla</button>
+        </div>
       </section>
 
       <section class="sec">
         <h3>Skapa möbel <span class="pill" id="aiPill">Claude: ansluter…</span></h3>
-        <textarea id="aiText" placeholder="t.ex. tresitssoffa 218x80x80 #696964&#10;eller: garderob 80x60x200 vit"></textarea>
+        <textarea id="aiText" placeholder="t.ex. tresitssoffa 218x80x80 #696964&#10;eller klistra in en länk till en produktsida"></textarea>
         <div class="row">
           <button class="btn primary" id="bCreate">Skapa</button>
           <button class="btn" id="bPhoto">Från bild…</button>
           <input type="file" id="fPhoto" accept="image/*" hidden>
         </div>
-        <div class="hint">Mått anges bredd × djup × höjd. Du kan klistra in en bild direkt i rutan. Beskriv gärna detaljer: antal kuddar, breda armstöd, “kan fällas ned”.</div>
+        <div class="hint">Mått anges bredd × djup × höjd. Du kan klistra in en bild eller en länk till en produktsida direkt i rutan. Beskriv gärna detaljer: antal kuddar, breda armstöd, “kan fällas ned”.</div>
         <div class="status" id="aiStatus"></div>
       </section>
 
       <section class="sec">
         <h3>Bibliotek</h3>
+        <div class="row">
+          <button class="btn small" id="bLibExport">Exportera mina möbler</button>
+          <button class="btn small" id="bLibImport">Importera möbler</button>
+          <input type="file" id="fLibImport" accept=".json,application/json" hidden>
+        </div>
         <div class="lib" id="libMine"></div>
+        <div class="lib" id="libShared"></div>
         <div class="lib" id="libBuiltin"></div>
       </section>
 
@@ -258,9 +283,10 @@ input[type=range]{width:100%;accent-color:var(--accent)}
       <section class="sec">
         <h3>Inställningar</h3>
         <div class="grid2">
-          <label class="f">Ögonhöjd (cm)<input type="number" id="sEye" min="50" max="250"></label>
+          <label class="f">Din längd (cm)<input type="number" id="sEye" min="80" max="230"></label>
           <label class="f">Rutnät/snäpp (cm)<input type="number" id="sSnap" min="1" max="50"></label>
         </div>
+        <div class="hint" id="eyeHint"></div>
         <label class="f inline"><input type="checkbox" id="sCeil"> Tak när du går runt</label>
         <label class="f inline"><input type="checkbox" id="sCollide"> Kan inte gå genom väggar</label>
         <label class="f inline"><input type="checkbox" id="sDims"> Visa väggmått i planen</label>
@@ -287,7 +313,7 @@ input[type=range]{width:100%;accent-color:var(--accent)}
         <input type="date" id="sunDate" aria-label="Datum">
       </div>
       <div class="dpad" id="dpad">
-        <span></span><button data-k="KeyW">▲</button><span></span>
+        <button class="act" data-sit>Sitt</button><button data-k="KeyW">▲</button><button class="act" data-use>E</button>
         <button data-k="KeyA">◀</button><button data-k="KeyS">▼</button><button data-k="KeyD">▶</button>
       </div>
     </div>
@@ -334,7 +360,7 @@ function parseColor(text){
 /* ============================== furniture generators ============================== */
 const B = (x, y0, z, w, h, d, ex) => Object.assign({ s:'box', x, y:y0 + h/2, z, w, h, d }, ex || {});
 const C = (x, y0, z, dia, h, ex) => Object.assign({ s:'cyl', x, y:y0 + h/2, z, w:dia, h, d:dia }, ex || {});
-const DARKWOOD = '#4a3a2c', METAL = '#2e2e2e', LINEN = '#f3f1ec';
+const DARKWOOD = '#4a3a2c', METAL = '#2e2e2e', LINEN = '#f3f1ec', WARM = '#ffd29a';
 const corners = (fn) => [[-1,-1],[1,-1],[-1,1],[1,1]].map(([a,b]) => fn(a,b));
 
 function genSofa(W=218, D=90, H=82, seats=3, armW=14, color='#696964', name){
@@ -438,6 +464,31 @@ function genTv(W=160, D=40, H=50, color='#ffffff', name){
 function genRug(W=200, D=300, color='#cfc6b8', name){
   return { name: name || 'Matta', w:W, d:D, h:1, color, joints:[], parts:[B(0, 0, 0, W, 1, D)] };
 }
+function genFloorLamp(W=42, H=160, color='#2e2e2e', name, shade='#f1ead9'){
+  return { name: name || 'Golvlampa', w:W, d:W, h:H, color, joints:[], parts:[
+    C(0, 0, 0, W*0.65, 3), C(0, 3, 0, 2.5, H-33), C(0, H-32, 0, W, 30, { c:shade, e:1 }), C(0, H-33, 0, 6, 2) ],
+    lights:[{ x:0, y:H-20, z:0, c:WARM, i:1.1, r:550 }] };
+}
+function genTableLamp(W=30, H=50, color='#c9b79c', name, shade='#f4efe4'){
+  return { name: name || 'Bordslampa', w:W, d:W, h:H, color, joints:[], parts:[
+    C(0, 0, 0, 14, 3), C(0, 3, 0, 10, H-26), C(0, H-23, 0, W, 22, { c:shade, e:1 }) ],
+    lights:[{ x:0, y:H-13, z:0, c:WARM, i:0.6, r:350 }] };
+}
+function genPendant(W=40, H=250, color='#2b2b2b', name){
+  const y0 = Math.max(120, H-85);
+  return { name: name || 'Taklampa', w:W, d:W, h:H, color, joints:[], parts:[
+    C(0, H-2, 0, 10, 2), C(0, y0+22, 0, 0.8, H-2-(y0+22), { c:'#111111' }), C(0, y0, 0, W, 22), C(0, y0-1, 0, W*0.4, 3, { c:'#fff6e0', e:1 }) ],
+    lights:[{ x:0, y:y0+4, z:0, c:WARM, i:1.4, r:650 }] };
+}
+function genCeilingLamp(W=35, H=250, color='#ffffff', name){
+  return { name: name || 'Plafond', w:W, d:W, h:H, color, joints:[], parts:[ C(0, H-10, 0, W, 10, { e:1 }) ],
+    lights:[{ x:0, y:H-16, z:0, c:'#ffe4bd', i:1.4, r:650 }] };
+}
+function genWallLamp(W=18, D=22, H=30, color='#2e2e2e', name){
+  return { name: name || 'Vägglampa', w:W, d:D, h:H, color, elev:150, joints:[], parts:[
+    B(0, 6, -D/2+1, 10, 16, 2), B(0, 12, -D/2+6, 2, 2, 10), C(0, 4, D/2-W/2, W, 22, { c:'#f2ece0', e:1 }) ],
+    lights:[{ x:0, y:14, z:D/2-W/2, c:WARM, i:0.6, r:400 }] };
+}
 function genBox(W=60, D=60, H=60, color='#bbbbbb', name){
   return { name: name || 'Möbel', w:W, d:D, h:H, color, joints:[], parts:[B(0, 0, 0, W, H, D)] };
 }
@@ -457,6 +508,11 @@ const BUILTINS = [
   { label:'Skrivbord', make:() => genDesk(120, 60, 74, '#ffffff') },
   { label:'TV-bänk', make:() => genTv(160, 40, 50, '#ffffff') },
   { label:'Matta', make:() => genRug(200, 300, '#cfc6b8') },
+  { label:'Golvlampa', make:() => genFloorLamp() },
+  { label:'Bordslampa', make:() => genTableLamp() },
+  { label:'Taklampa', make:() => genPendant() },
+  { label:'Plafond', make:() => genCeilingLamp() },
+  { label:'Vägglampa', make:() => genWallLamp() },
 ];
 
 function parseLocal(text){
@@ -469,6 +525,11 @@ function parseLocal(text){
   name = name ? name[0].toUpperCase() + name.slice(1) : '';
   const nm = name || undefined, c = (d) => color || d;
   const has = (...k) => k.some(x => t.includes(x));
+  if (has('golvlampa','läslampa','stålampa')) return genFloorLamp(W||42, H||160, c('#2e2e2e'), nm);
+  if (has('bordslampa','fönsterlampa','sänglampa')) return genTableLamp(W||30, H||50, c('#c9b79c'), nm);
+  if (has('plafond')) return genCeilingLamp(W||35, H||250, c('#ffffff'), nm);
+  if (has('vägglampa')) return genWallLamp(W||18, D||22, H||30, c('#2e2e2e'), nm);
+  if (has('taklampa','pendel','lampa')) return genPendant(W||40, H||250, c('#2b2b2b'), nm);
   if (has('sängskåp','väggsäng','bäddskåp','fällsäng','murphy')) return genWallBed(W||160, D||45, H||225, c('#f2f1ec'), nm);
   if (has('fällbord','klaffbord','klaff')) return genDropLeaf(W||130, D||80, H||74, c('#b88a5a'), nm);
   if (has('soffa','fåtölj','sits')){
@@ -506,13 +567,18 @@ function sanitizeDef(d){
     if (Number.isFinite(+p.o) && +p.o < 1) q.o = clamp(+p.o, 0.05, 1);
     if (q.s === 'cyl' && ['x','z'].includes(p.axis)) q.axis = p.axis;
     if (p.j && ids.has(String(p.j))) q.j = String(p.j);
+    if (p.e) q.e = 1;
     return q;
   });
   if (!parts.length) throw new Error('Modellen saknade delar.');
+  const lights = (Array.isArray(d.lights) ? d.lights : []).slice(0, 4).map(L => {
+    const q = { x:N(L.x,0), y:N(L.y,100), z:N(L.z,0), c: isHex(L.c) ? normHex(L.c) : WARM, i: clamp(N(L.i,1), 0.05, 4), r: clamp(N(L.r,500), 50, 2000) };
+    if (L.j && ids.has(String(L.j))) q.j = String(L.j); return q; });
   let minx=1e9,maxx=-1e9,miny=1e9,maxy=-1e9,minz=1e9,maxz=-1e9;
   parts.forEach(p => { minx=Math.min(minx,p.x-p.w/2); maxx=Math.max(maxx,p.x+p.w/2); miny=Math.min(miny,p.y-p.h/2); maxy=Math.max(maxy,p.y+p.h/2); minz=Math.min(minz,p.z-p.d/2); maxz=Math.max(maxz,p.z+p.d/2); });
   return { name: String(d.name || 'Möbel').slice(0, 60), w: clamp(N(d.w, maxx-minx), 1, 3000), d: clamp(N(d.d, maxz-minz), 1, 3000),
-    h: clamp(N(d.h, maxy), 0.5, 1000), color: isHex(d.color) ? normHex(d.color) : '#b5b5b0', parts, joints };
+    h: clamp(N(d.h, maxy), 0.5, 1000), color: isHex(d.color) ? normHex(d.color) : '#b5b5b0', parts, joints,
+    ...(lights.length ? { lights } : {}), ...(typeof d.src === 'string' && /^https?:\/\//.test(d.src) ? { src:d.src.slice(0, 500) } : {}), ...(N(d.elev, 0) > 0 ? { elev: clamp(N(d.elev, 0), 0, 400) } : {}) };
 }
 
 /* ============================== state ============================== */
@@ -529,7 +595,7 @@ function defaultState(){
   openings[6].side = 1;
   const st = { app:'hemplan3d', version:1, name:'Exempellägenhet', walls, openings, furniture:[], library:[],
     viewer:{ x:400, y:580, a:-90 },
-    settings:{ eye:170, snap:5, floor:'#c8a273', wall:'#f3f1ec', ceiling:true, collide:true, dims:true, defT:12, defH:250 },
+    settings:{ height:179, snap:5, floor:'#c8a273', wall:'#f3f1ec', ceiling:true, collide:true, dims:true, defT:12, defH:250 },
     underlay:null, north:0, floorPaint:[], sun:defaultSun() };
   const add = (def, x, y, rot, j) => { const f = makeInstance(def, x, y, rot); if (j) f.j = j; st.furniture.push(f); };
   add(genSofa(218,90,82,3,14,'#696964'), 240, 58, 0);
@@ -542,7 +608,7 @@ function defaultState(){
   return st;
 }
 function makeInstance(def, x, y, rot = 0){
-  return { id:uid(), def:clone(def), name:def.name, w:def.w, d:def.d, h:def.h, color:def.color, x:r1(x), y:r1(y), rot, elev:0, j:{} };
+  return { id:uid(), def:clone(def), name:def.name, w:def.w, d:def.d, h:def.h, color:def.color, x:r1(x), y:r1(y), rot, elev:def.elev || 0, j:{}, ...((def.lights || []).length ? { on:true } : {}) };
 }
 const serialize = (withSrc = true) => JSON.stringify(S, (k, v) => (k.startsWith('_') || (!withSrc && k === 'src')) ? undefined : v);
 function validState(o){ return o && Array.isArray(o.walls) && Array.isArray(o.furniture); }
@@ -551,7 +617,10 @@ function normalizeState(o){
   o.openings = Array.isArray(o.openings) ? o.openings : [];
   o.floorPaint = Array.isArray(o.floorPaint) ? o.floorPaint : [];
   o.library = Array.isArray(o.library) ? o.library : [];
+  const hadHeight = o.settings && o.settings.height;
   o.settings = Object.assign({}, d.settings, o.settings || {});
+  if (!hadHeight && o.settings.eye) o.settings.height = Math.round(o.settings.eye * 179/166);
+  delete o.settings.eye;
   o.viewer = Object.assign({}, d.viewer, o.viewer || {});
   o.sun = Object.assign(defaultSun(), o.sun || {}); o.north = Number.isFinite(+o.north) ? +o.north : 0;
   o.furniture.forEach(f => { f.j = f.j || {}; f.elev = f.elev || 0; });
@@ -612,6 +681,26 @@ function wallsBBox(){
 let renderer = null, scene, cam, wallsG, furnG, floorMesh, ceilMesh, hemi, dirL, ambientL, ok3d = true;
 const furnObjs = new Map();
 const matCache = new Map();
+const MAX_SHADOW_LAMPS = 6;
+function countShadowLights(){ let n = 0; furnG.traverse(o => { if (o.isPointLight && o.castShadow) n++; }); return n; }
+const glowCache = new Map();
+function glowMat(hex, on){
+  const k = hex + '|' + on;
+  if (!glowCache.has(k)){
+    const c = new THREE.Color(hex).convertSRGBToLinear();
+    glowCache.set(k, new THREE.MeshStandardMaterial({ color:c, roughness:0.9, emissive: on ? c.clone().lerp(new THREE.Color(1, 0.85, 0.6), 0.35) : new THREE.Color(0), emissiveIntensity: on ? 1.0 : 0 }));
+  }
+  return glowCache.get(k);
+}
+const isLampF = f => (f.def.lights || []).length > 0;
+function applyLight(f, root){
+  if (!root) return;
+  const on = f.on !== false, lvl = f.lightLevel ?? 1;
+  root.traverse(o => {
+    if (o.isPointLight){ o.intensity = on ? o.userData.base * lvl * 1.6 : 0; o.color.set(f.lightColor || o.userData.c).convertSRGBToLinear(); }
+    else if (o.isMesh && o.userData.glow) o.material = glowMat(o.userData.col, on);
+  });
+}
 function mat(hex, o = 1){
   const k = hex + '|' + o;
   if (!matCache.has(k)){
@@ -788,7 +877,8 @@ function scaledDef(f){
   const sc = { x:sx, y:sy, z:sz };
   const joints = (d.joints || []).map(j => Object.assign({}, j, { pivot:[j.pivot[0]*sx, j.pivot[1]*sy, j.pivot[2]*sz],
     from: j.type === 'slide' ? j.from*sc[j.axis] : j.from, to: j.type === 'slide' ? j.to*sc[j.axis] : j.to }));
-  return { parts, joints };
+  const lights = (d.lights || []).map(L => Object.assign({}, L, { x:L.x*sx, y:L.y*sy, z:L.z*sz, r:L.r*Math.max(1, (sx+sy+sz)/3) }));
+  return { parts, joints, lights };
 }
 function partGeom(p){
   if (p.s === 'cyl'){ const g = new THREE.CylinderGeometry(p.w/2, p.w/2, p.h, 18); if (p.axis === 'x') g.rotateZ(Math.PI/2); else if (p.axis === 'z') g.rotateX(Math.PI/2); return g; }
@@ -797,7 +887,8 @@ function partGeom(p){
 }
 function buildFurniture(f){
   const root = new THREE.Group(); root.userData.fid = f.id;
-  const { parts, joints } = scaledDef(f);
+  const { parts, joints, lights } = scaledDef(f);
+  const isLamp = lights.length > 0;
   const byId = Object.fromEntries(joints.map(j => [j.id, j])), jmap = {};
   const getG = (id, depth = 0) => {
     if (!id || !byId[id] || depth > 8) return { g:root, pv:[0,0,0] };
@@ -809,10 +900,17 @@ function buildFurniture(f){
   joints.forEach(j => getG(j.id));
   parts.forEach(p => {
     const e = getG(p.j), col = p.c || f.color;
-    const m = new THREE.Mesh(partGeom(p), mat(col, p.o || 1));
+    const m = new THREE.Mesh(partGeom(p), p.e ? glowMat(col, false) : mat(col, p.o || 1));
     m.position.set(p.x-e.pv[0], p.y-e.pv[1], p.z-e.pv[2]);
-    m.castShadow = !(p.o < 1); m.receiveShadow = true; m.userData.fid = f.id; m.userData.col = col; m.userData.o = p.o || 1;
+    // a lamp's own parts must not block its light
+    m.castShadow = !(p.o < 1) && !p.e && !isLamp; m.receiveShadow = true; m.userData.fid = f.id; m.userData.col = col; m.userData.o = p.o || 1; if (p.e) m.userData.glow = 1;
     e.g.add(m);
+  });
+  lights.forEach(L => {
+    const e = getG(L.j), pl = new THREE.PointLight(new THREE.Color(L.c).convertSRGBToLinear(), 0, L.r, 2);
+    pl.position.set(L.x-e.pv[0], L.y-e.pv[1], L.z-e.pv[2]); pl.userData.base = L.i; pl.userData.c = L.c;
+    if (countShadowLights() < MAX_SHADOW_LAMPS){ pl.castShadow = true; pl.shadow.mapSize.set(256, 256); pl.shadow.bias = -0.004; pl.shadow.camera.near = 4; pl.shadow.camera.far = L.r; }
+    e.g.add(pl);
   });
   root.userData.jmap = jmap;
   return root;
@@ -843,6 +941,7 @@ function computeHulls(f, root){
     hulls.push({ pts:hull(pts), col:o.userData.col, top, o:o.userData.o });
   });
   hulls.sort((a,b) => a.top - b.top);
+  f._lights = []; root.traverse(o => { if (o.isPointLight){ o.updateMatrixWorld(); _v.setFromMatrixPosition(o.matrixWorld).applyMatrix4(_inv); f._lights.push([_v.x, _v.z, o.userData.base]); } });
   f._hulls = hulls; f._bb = { minx, maxx, minz, maxz };
 }
 // fallback hulls when WebGL is unavailable: footprint only
@@ -852,7 +951,7 @@ function rebuildFurniture(f){
   if (!ok3d){ footprintHull(f); return; }
   const old = furnObjs.get(f.id);
   if (old){ furnG.remove(old); old.traverse(o => { if (o.isMesh) o.geometry.dispose(); }); }
-  const root = buildFurniture(f); applyJoints(f, root); placeRoot(f, root);
+  const root = buildFurniture(f); applyJoints(f, root); applyLight(f, root); placeRoot(f, root);
   furnG.add(root); furnObjs.set(f.id, root); computeHulls(f, root);
 }
 function removeFurnObj(id){ const o = furnObjs.get(id); if (o){ furnG.remove(o); o.traverse(m => { if (m.isMesh) m.geometry.dispose(); }); furnObjs.delete(id); } }
@@ -921,6 +1020,10 @@ function drawPlan(){
       ctx.strokeStyle = shade(h.col, 0.62); ctx.stroke();
     });
     const isSel = sel?.kind === 'furn' && sel.id === f.id, b = f._bb;
+    if (f.on !== false && f._lights?.length){
+      f._lights.forEach(([lx, lz, bi]) => { const rr = 40 + 50*bi*(f.lightLevel ?? 1); const gr = ctx.createRadialGradient(lx, lz, 0, lx, lz, rr);
+        gr.addColorStop(0, 'rgba(255,205,110,0.55)'); gr.addColorStop(1, 'rgba(255,205,110,0)'); ctx.fillStyle = gr; ctx.beginPath(); ctx.arc(lx, lz, rr, 0, 7); ctx.fill(); });
+    }
     if (isSel){ ctx.strokeStyle = col.accent; ctx.lineWidth = 2/z; ctx.setLineDash([6/z, 4/z]); ctx.strokeRect(b.minx-3/z, b.minz-3/z, b.maxx-b.minx+6/z, b.maxz-b.minz+6/z); ctx.setLineDash([]); }
     ctx.restore();
     const fw = (b.maxx-b.minx)*z;
@@ -1138,7 +1241,7 @@ planCv.addEventListener('pointerup', endDrag);
 planCv.addEventListener('pointercancel', endDrag);
 planCv.addEventListener('pointerleave', () => { if (!drag){ cursorW = null; reqPlan(); } });
 planCv.addEventListener('contextmenu', e => { e.preventDefault(); if (tool === 'wall') finishWall(); });
-planCv.addEventListener('dblclick', e => { if (tool === 'wall') return finishWall(); if (tool === 'select'){ const h = hitTest(evW(e)); if (h?.kind === 'furn' && !toggleJoints(h.f)) toast(`${h.f.name} har inga rörliga delar.`); if (h?.kind === 'open' && h.o.type === 'door') toggleDoor(h.o); } });
+planCv.addEventListener('dblclick', e => { if (tool === 'wall') return finishWall(); if (tool === 'select'){ const h = hitTest(evW(e)); if (h?.kind === 'furn') interact(h.f); if (h?.kind === 'open' && h.o.type === 'door') toggleDoor(h.o); } });
 planCv.addEventListener('wheel', e => {
   e.preventDefault();
   const p = evW(e), k = Math.exp(-e.deltaY * 0.0015), nz = clamp(pv.z * k, 0.05, 12);
@@ -1223,7 +1326,8 @@ function showTip(){
 /* ============================== inspector ============================== */
 const insp = $('#insp');
 const nf = (label, k, v, attrs = '') => `<label class="f">${label}<input type="number" data-k="${k}" value="${r1(v)}" step="any" ${attrs}></label>`;
-function renderInspector(){
+function renderInspector(){ renderInspector0(); applyCollapse(insp); }
+function renderInspector0(){
   if (tool === 'calib' && S.underlay){
     insp.innerHTML = `<section class="sec"><div class="insp-title"><span class="kind">Kalibrera</span></div>
       <div class="hint">${calib.pts.length < 2 ? 'Klicka på två punkter i planritningsbilden, t.ex. ändarna på en måttsatt vägg.' : `Avstånd enligt nuvarande skala: <b>${fmt(calib.measured)} cm</b>`}</div>
@@ -1246,11 +1350,17 @@ function renderInspector(){
       <div class="row"><button class="btn small" data-act="rot--90">↺ 90°</button><button class="btn small" data-act="rot--15">↺ 15°</button><button class="btn small" data-act="rot-15">↻ 15°</button><button class="btn small" data-act="rot-90">↻ 90°</button></div>
       <div class="grid2">${nf('Höjd över golv','elev',f.elev||0,'min="0"')}<div></div></div>
     </section>
+    ${isLampF(f) ? `<section class="sec"><h3>Belysning <span class="pill ${f.on !== false ? 'on' : ''}">${f.on !== false ? 'tänd' : 'släckt'}</span></h3>
+      <div class="row"><button class="btn small" data-act="light-toggle">${f.on !== false ? 'Släck' : 'Tänd'}</button></div>
+      <label class="f">Ljusstyrka<input type="range" min="0.1" max="2.5" step="0.05" data-k="lightLevel" value="${f.lightLevel ?? 1}"></label>
+      <label class="f">Ljusfärg<select data-k="lightColor">${[['', 'Som lampan'], ['#ffc488', 'Extra varm (2200 K)'], ['#ffd29a', 'Varm (2700 K)'], ['#ffe4bd', 'Neutral (3500 K)'], ['#fff4e6', 'Kall (5000 K)']].map(([v, n]) => `<option value="${v}" ${(f.lightColor || '') === v ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
+      <div class="hint">Dubbelklicka på lampan, eller sikta och tryck <kbd>E</kbd> när du går runt. Ljuset syns bäst på kvällen: slå på solsimuleringen och välj en sen tid.</div></section>` : ''}
     ${joints.length ? `<section class="sec"><h3>Rörliga delar</h3>
       ${joints.map(j => `<div class="joint"><span>${esc(j.label)}</span><button class="btn small" data-act="jt-${esc(j.id)}">${(f.j[j.id]||0) > 0.5 ? 'Stäng' : 'Öppna'}</button>
       <input type="range" min="0" max="1" step="0.01" data-k="joint:${esc(j.id)}" value="${f.j[j.id]||0}" style="grid-column:1/-1" aria-label="${esc(j.label)}"></div>`).join('')}
       <button class="btn small" data-act="jt-all">Fäll alla</button>
       <div class="hint">I 3D-läget: dubbelklicka på möbeln. När du går runt: sikta och tryck <kbd>E</kbd>.</div></section>` : ''}
+    ${f.def.src ? `<section class="sec"><h3>Produktsida</h3><a class="srclink" href="${esc(f.def.src)}" target="_blank" rel="noopener">${esc(f.def.src.replace(/^https?:\/\/(www\.)?/, '').slice(0, 90))}</a></section>` : ''}
     <section class="sec"><h3>Ändra med Claude</h3>
       <textarea id="aiEdit" placeholder="t.ex. gör armstöden bredare, lägg till en schäslong till höger, gör dörrarna till skjutdörrar"></textarea>
       <div class="row"><button class="btn" data-act="ai-edit" ${AI.sample ? '' : 'disabled'}>Ändra</button></div>
@@ -1305,7 +1415,7 @@ function helpHTML(){
   </dl></section>
   <section class="sec"><h3>Gå runt</h3><dl class="keys">
     <dt><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></dt><dd>Gå</dd><dt>Mus</dt><dd>Titta (klicka först)</dd>
-    <dt><kbd>Shift</kbd></dt><dd>Gå fortare</dd><dt><kbd>E</kbd></dt><dd>Fäll ned/upp, öppna/stäng</dd><dt><kbd>Esc</kbd></dt><dd>Släpp musen</dd>
+    <dt><kbd>Shift</kbd></dt><dd>Gå fortare</dd><dt><kbd>E</kbd></dt><dd>Tänd/släck, fäll ned/upp, öppna/stäng</dd><dt><kbd>C</kbd></dt><dd>Sätt dig / res dig (sikta på stol, soffa eller säng)</dd><dt><kbd>Esc</kbd></dt><dd>Släpp musen</dd>
   </dl><div class="hint">Den orange pricken i planen är var du står. Dra den för att flytta dig.</div></section>`;
 }
 let lenMode = 'stretch';
@@ -1319,6 +1429,8 @@ function onField(el, ev){
   if (k === 'lenMode'){ lenMode = v; return; }
   if (sel?.kind === 'furn'){
     const f = furnById(sel.id); if (!f) return;
+    if (k === 'lightLevel'){ f.lightLevel = num(v, 1); applyLight(f, furnObjs.get(f.id)); reqPlan(); if (ev === 'change') scheduleSave(); return; }
+    if (k === 'lightColor'){ if (v) f.lightColor = v; else delete f.lightColor; applyLight(f, furnObjs.get(f.id)); scheduleSave(); return; }
     if (k.startsWith('joint:')){ const id = k.slice(6); f.j[id] = num(v); anims.delete(f.id); updateFurnJoints(f); reqPlan(); if (ev === 'change'){ scheduleSave(); renderInspector(); } return; }
     if (k === 'color'){ if (ev === 'input'){ f.color = v; const t = insp.querySelector('[data-k="colorText"]'); if (t) t.value = v; rebuildFurniture(f); reqPlan(); } else { changed(); } return; }
     pushUndo();
@@ -1367,6 +1479,7 @@ function onAct(a){
     else if (a === 'dup') duplicate(f);
     else if (a === 'savelib'){ const d = clone(f.def); Object.assign(d, { name:f.name, color:f.color }); const sc = scaleDefTo(d, f.w, f.d, f.h); S.library.unshift(sc); changed(); renderLibrary(); toast(`“${f.name}” sparad i biblioteket.`); }
     else if (a === 'jt-all') toggleJoints(f);
+    else if (a === 'light-toggle') toggleLight(f);
     else if (a.startsWith('jt-')) { const id = a.slice(3); animateJoint(f, id, (f.j[id] || 0) > 0.5 ? 0 : 1); }
     else if (a === 'ai-edit') aiEdit(f);
     return;
@@ -1387,7 +1500,7 @@ function onAct(a){
     buildWalls(); changed();
   }
 }
-function scaleDefTo(def, w, d, h){ const f = { def, w, d, h }; const sd = scaledDef(f); return { name:def.name, w, d, h, color:def.color, parts:sd.parts, joints:sd.joints }; }
+function scaleDefTo(def, w, d, h){ const f = { def, w, d, h }; const sd = scaledDef(f); return { name:def.name, w, d, h, color:def.color, parts:sd.parts, joints:sd.joints, ...(sd.lights.length ? { lights:sd.lights } : {}), ...(def.elev ? { elev:def.elev } : {}), ...(def.src ? { src:def.src } : {}) }; }
 function setWallLength(w, L, mode){
   L = Math.max(1, L); const g = wg(w), delta = L - g.len; if (Math.abs(delta) < 0.01) return;
   const dx = g.ux*delta, dy = g.uy*delta, pb = w.b.x*g.ux + w.b.y*g.uy;
@@ -1512,7 +1625,7 @@ function sunRiseSet(){
     if (prev !== null){ if (prev < -0.833 && el >= -0.833 && rise === null) rise = h; if (prev >= -0.833 && el < -0.833) set = h; }
     prev = el;
   }
-  const t = $('#sunRise');
+  const t = $('#sunRise'); sunRiseSet.last = { rise, set };
   if (rise === null && set === null) t.textContent = maxEl > 0 ? 'Midnattssol: solen går inte ned.' : 'Polarnatt: solen går inte upp.';
   else t.textContent = `Soluppgång ${rise !== null ? hm(rise) : 'före 00:00'} · nedgång ${set !== null ? hm(set) : 'efter 24:00'} · högst ${Math.round(maxEl)}°`;
 }
@@ -1578,6 +1691,34 @@ document.querySelectorAll('[data-sunday]').forEach(b => b.addEventListener('clic
   if (!S.sun.on){ S.sun.on = true; $('#sunOn').checked = true; }
   sunChanged(true);
 }));
+
+function toggleLight(f){ f.on = f.on === false; applyLight(f, furnObjs.get(f.id)); reqPlan(); scheduleSave(); if (sel?.kind === 'furn' && sel.id === f.id) renderInspector(); }
+function interact(f){ if (isLampF(f)) toggleLight(f); else if (!toggleJoints(f)) toast(`${f.name} har inga rörliga delar.`); }
+function setAllLamps(on){ let n = 0; S.furniture.forEach(f => { if (isLampF(f)){ f.on = on; applyLight(f, furnObjs.get(f.id)); n++; } }); reqPlan(); scheduleSave(); renderInspector(); return n; }
+$('#bLampsOn').addEventListener('click', () => { if (!setAllLamps(true)) toast('Det finns inga lampor ännu. Lägg till en från biblioteket eller skapa en med Claude.'); });
+$('#bLampsOff').addEventListener('click', () => setAllLamps(false));
+$('#bEvening').addEventListener('click', () => {
+  S.sun.on = true; $('#sunOn').checked = true; sunRiseSet();
+  const set = sunRiseSet.last?.set; S.sun.time = set !== null && set !== undefined ? Math.min(23.5, Math.round((set + 1.25)*4)/4) : 21;
+  const n = setAllLamps(true); sunChanged(false);
+  toast(n ? `Kväll kl ${hm(S.sun.time)}, ${n} lampor tända.` : `Kväll kl ${hm(S.sun.time)}. Lägg till lampor från biblioteket.`);
+  if (view === 'plan') setView('walk');
+});
+
+/* ============================== collapsible panel sections ============================== */
+const COLL_KEY = 'hemplan3d.collapsed';
+let collapsed = new Set(); try { collapsed = new Set(JSON.parse(localStorage.getItem(COLL_KEY) || '[]')); } catch {}
+const secKey = h => ([...h.childNodes].find(n => n.nodeType === 3 && n.textContent.trim())?.textContent || h.textContent).trim().toLowerCase();
+function applyCollapse(root = document){
+  root.querySelectorAll('.sec > h3').forEach(h => {
+    const k = secKey(h), c = collapsed.has(k);
+    h.classList.add('tg'); h.setAttribute('role', 'button'); h.tabIndex = 0; h.setAttribute('aria-expanded', String(!c)); h.title = c ? 'Visa' : 'Minimera';
+    h.parentElement.classList.toggle('collapsed', c);
+  });
+}
+function toggleSec(h){ const k = secKey(h); if (collapsed.has(k)) collapsed.delete(k); else collapsed.add(k); try { localStorage.setItem(COLL_KEY, JSON.stringify([...collapsed])); } catch {} applyCollapse(h.closest('.panel') || document); }
+document.addEventListener('click', e => { const h = e.target.closest('.sec > h3.tg'); if (h && !e.target.closest('button, a, input, select')) toggleSec(h); });
+document.addEventListener('keydown', e => { const h = e.target.closest?.('.sec > h3.tg'); if (h && (e.key === 'Enter' || e.key === ' ')){ e.preventDefault(); e.stopPropagation(); toggleSec(h); } }, true);
 
 /* ============================== painting ============================== */
 let brush = '#d9d2c5';
@@ -1649,21 +1790,98 @@ function paintFloorAt(p){
 }
 
 /* ============================== library ============================== */
+// Shared templates: in Claude they live in the artifact's database (everyone who opens the app sees them);
+// on a regular website they are read from templates.json next to the page.
+let SHARED = [], canPublish = false, sharedSource = null;
+async function loadShared(){
+  const db = await getDB();
+  if (db){
+    sharedSource = 'db';
+    try { const user = await window.claude.use('user').catch(() => null); canPublish = !!(user && (user.isOwner?.() || user.canEdit?.())); } catch {}
+    try {
+      const snap = await withTimeout(db.collection('templates').get(), 12000);
+      SHARED = snap.docs.map(d => { try { const v = d.data(); return Object.assign(sanitizeDef(JSON.parse(v.json)), { _id:d.id, _added:v.added || 0 }); } catch { return null; } }).filter(Boolean).sort((a, b) => a.name.localeCompare(b.name, 'sv'));
+    } catch {}
+  } else if (!window.claude?.use){
+    sharedSource = 'file';
+    try { const r = await fetch('templates.json', { cache:'no-cache' }); if (r.ok){ const j = await r.json(); SHARED = (j.items || []).map(d => { try { return sanitizeDef(d); } catch { return null; } }).filter(Boolean); } } catch {}
+  }
+  renderLibrary();
+}
 function renderLibrary(){
-  const item = (d, i, mine) => `<div class="item" role="button" tabindex="0" data-lib="${mine ? 'm' : 'b'}${i}"><span class="sw" style="background:${esc(d.color)}"></span><span class="nm">${esc(d.name)}${(d.joints||[]).length ? ' <span class="tag">rörlig</span>' : ''}</span><span class="dm">${Math.round(d.w)}×${Math.round(d.d)}×${Math.round(d.h)}</span>${mine ? `<button class="x" data-libdel="${i}" aria-label="Ta bort ${esc(d.name)} ur biblioteket">×</button>` : ''}</div>`;
-  $('#libMine').innerHTML = S.library.length ? `<div class="hint" style="margin-bottom:2px">Mina möbler</div>` + S.library.map((d, i) => item(d, i, true)).join('') : '';
-  $('#libBuiltin').innerHTML = `<div class="hint" style="margin:4px 0 2px">Mallar · klicka för att lägga till</div>` + BUILT.map((d, i) => item(d, i, false)).join('');
+  const tags = d => ((d.lights || []).length ? ' <span class="tag">lampa</span>' : '') + ((d.joints || []).length ? ' <span class="tag">rörlig</span>' : '');
+  const item = (d, key, extra = '') => `<div class="item" role="button" tabindex="0" data-lib="${key}"><span class="sw" style="background:${esc(d.color)}"></span><span class="nm" title="${esc(d.name)}">${esc(d.name)}${tags(d)}</span><span class="dm">${Math.round(d.w)}×${Math.round(d.d)}×${Math.round(d.h)}</span>${extra}</div>`;
+  $('#libMine').innerHTML = S.library.length ? `<div class="sub"><span>Mina möbler</span><span>✎ redigera</span></div>` + S.library.map((d, i) => item(d, 'm' + i, `<button class="ed" data-libedit="${i}" aria-label="Redigera ${esc(d.name)}">✎</button><button class="x" data-libdel="${i}" aria-label="Ta bort ${esc(d.name)} ur biblioteket">×</button>`)).join('') : `<div class="hint">Möbler du skapar hamnar under <b>Mina möbler</b> här.</div>`;
+  $('#libShared').innerHTML = SHARED.length ? `<div class="sub"><span>Delade mallar · för alla</span></div>` + SHARED.map((d, i) => item(d, 's' + i, canPublish && sharedSource === 'db' ? `<button class="x" data-shdel="${i}" aria-label="Ta bort mallen ${esc(d.name)} för alla">×</button>` : '')).join('') : '';
+  $('#libBuiltin').innerHTML = `<div class="sub"><span>Inbyggda mallar · klicka för att lägga till</span></div>` + BUILT.map((d, i) => item(d, 'b' + i)).join('');
 }
 const BUILT = BUILTINS.map(b => b.make());
+const cleanDef = d => { const o = clone(d); Object.keys(o).forEach(k => { if (k.startsWith('_')) delete o[k]; }); return o; };
 function libClick(e){
+  const ed = e.target.closest('[data-libedit]'); if (ed){ e.stopPropagation(); editLibItem(+ed.dataset.libedit); return; }
   const x = e.target.closest('[data-libdel]');
-  if (x){ e.stopPropagation(); pushUndo(); S.library.splice(+x.dataset.libdel, 1); changed(); renderLibrary(); return; }
+  if (x){ e.stopPropagation(); confirmBtn(x, 'Ta bort?', () => { pushUndo(); S.library.splice(+x.dataset.libdel, 1); changed(); renderLibrary(); }); x.textContent = 'Ta bort?'; return; }
+  const sd = e.target.closest('[data-shdel]');
+  if (sd){ e.stopPropagation(); confirmBtn(sd, 'Ta bort för alla?', () => unpublishTemplate(SHARED[+sd.dataset.shdel])); return; }
   const it = e.target.closest('[data-lib]'); if (!it) return;
-  const k = it.dataset.lib, def = k[0] === 'm' ? S.library[+k.slice(1)] : BUILT[+k.slice(1)];
-  if (def) placeNew(def);
+  const k = it.dataset.lib, i = +k.slice(1), def = k[0] === 'm' ? S.library[i] : k[0] === 's' ? SHARED[i] : BUILT[i];
+  if (def) placeNew(cleanDef(def));
 }
-$('#libMine').addEventListener('click', libClick); $('#libBuiltin').addEventListener('click', libClick);
+['#libMine', '#libShared', '#libBuiltin'].forEach(id => $(id).addEventListener('click', libClick));
 $('#left').addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.matches('[data-lib]')) libClick(e); });
+
+function editLibItem(i){
+  const d = S.library[i]; if (!d) return;
+  const m = modal(`<b>Redigera möbel</b>
+    <label class="f">Namn<input type="text" id="leName" value="${esc(d.name)}"></label>
+    <div class="grid3"><label class="f">Bredd<input type="number" id="leW" value="${r1(d.w)}"></label><label class="f">Djup<input type="number" id="leD" value="${r1(d.d)}"></label><label class="f">Höjd<input type="number" id="leH" value="${r1(d.h)}"></label></div>
+    <div class="row"><input type="color" id="leC" value="${esc(d.color)}" aria-label="Huvudfärg"><span class="hint">Huvudfärg. Ändringen gäller nya exemplar, inte de som redan står i planen.</span></div>
+    <div class="row"><button class="btn primary" id="leSave">Spara</button><button class="btn" id="lePlace">Lägg till i planen</button><button class="btn" id="leExport">Exportera</button>
+      ${sharedSource === 'db' && canPublish ? '<button class="btn" id="lePub">Gör till delad mall</button>' : ''}
+      <button class="btn danger" id="leDel">Ta bort</button><button class="btn" data-close>Stäng</button></div>
+    <div class="status" id="leStatus">${sharedSource === 'file' ? 'Vill du göra möbeln till en permanent mall på webbsidan? Exportera den och lägg in den i templates.json, eller be Claude göra det.' : ''}</div>`);
+  const read = () => { const w = clamp(num($('#leW', m).value, d.w), 1, 3000), dd = clamp(num($('#leD', m).value, d.d), 1, 3000), h = clamp(num($('#leH', m).value, d.h), 0.5, 1000);
+    const out = (w !== d.w || dd !== d.d || h !== d.h) ? scaleDefTo(d, w, dd, h) : clone(d); out.name = $('#leName', m).value.trim().slice(0, 60) || d.name; out.color = $('#leC', m).value; return out; };
+  $('#leSave', m).addEventListener('click', () => { pushUndo(); S.library[i] = read(); changed(); renderLibrary(); m.remove(); toast('Sparat.'); });
+  $('#lePlace', m).addEventListener('click', () => { pushUndo(); S.library[i] = read(); renderLibrary(); m.remove(); placeNew(clone(S.library[i])); });
+  $('#leExport', m).addEventListener('click', () => exportFurniture([read()]));
+  $('#lePub', m)?.addEventListener('click', () => publishTemplate(read(), $('#leStatus', m)));
+  $('#leDel', m).addEventListener('click', e => confirmBtn(e.currentTarget, 'Ja, ta bort', () => { pushUndo(); S.library.splice(i, 1); changed(); renderLibrary(); m.remove(); }));
+}
+async function publishTemplate(def, st){
+  const db = await getDB(); if (!db) return;
+  st.className = 'status'; st.textContent = 'Publicerar…';
+  try {
+    const id = (def.name.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '-').slice(0, 30) || 'mobel') + '-' + uid();
+    await withTimeout(db.doc('templates/' + id).set({ name:def.name, json:JSON.stringify(cleanDef(def)), added:Date.now() }), 15000);
+    st.textContent = `“${def.name}” finns nu bland de delade mallarna för alla som öppnar appen.`; await loadShared();
+  } catch (e) { st.className = 'status err'; st.textContent = /denied|permission|not_granted|forbidden/i.test((e?.code || '') + (e?.message || '')) ? 'Bara appens ägare kan lägga till delade mallar.' : 'Det gick inte: ' + (e?.message || e); }
+}
+async function unpublishTemplate(def){
+  const db = await getDB(); if (!db || !def?._id) return;
+  try { await db.doc('templates/' + def._id).delete(); toast(`Mallen “${def.name}” är borttagen för alla.`); await loadShared(); }
+  catch (e) { toast('Mallen kunde inte tas bort: ' + (e?.message || e)); }
+}
+async function exportFurniture(items){
+  if (!items.length){ toast('Det finns inga egna möbler att exportera ännu.'); return; }
+  const data = JSON.stringify({ app:'hemplan3d-furniture', version:1, exported:new Date().toISOString(), items:items.map(cleanDef) });
+  const fname = (items.length === 1 ? items[0].name.normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/gi, '-').toLowerCase() : 'mina-mobler') + '.hemplan-mobler.json';
+  await saveFile(fname, data, `${items.length} möbler exporterade.`);
+}
+function importFurniture(text){
+  let o; try { o = JSON.parse(text); } catch { toast('Filen kunde inte läsas som JSON.'); return; }
+  let list = Array.isArray(o) ? o : o.items || null;
+  if (!list && (o.state || o.walls)){ const st = o.state || o; list = [...(st.library || []), ...(st.furniture || []).map(f => scaleDefTo(Object.assign(clone(f.def), { name:f.name, color:f.color }), f.w, f.d, f.h))]; }
+  if (!list){ toast('Hittade inga möbler i filen.'); return; }
+  const have = new Set(S.library.map(d => JSON.stringify(cleanDef(d))));
+  let added = 0, bad = 0; pushUndo();
+  list.forEach(d => { try { const sd = sanitizeDef(d), key = JSON.stringify(sd); if (!have.has(key)){ S.library.push(sd); have.add(key); added++; } } catch { bad++; } });
+  changed(); renderLibrary();
+  toast(added ? `${added} möbler importerade till Mina möbler.` + (bad ? ` ${bad} kunde inte läsas.` : '') : 'Inga nya möbler. De fanns redan i biblioteket.');
+}
+$('#bLibExport').addEventListener('click', () => exportFurniture(S.library));
+$('#bLibImport').addEventListener('click', () => $('#fLibImport').click());
+$('#fLibImport').addEventListener('change', async e => { const f = e.target.files[0]; e.target.value = ''; if (f) importFurniture(await f.text()); });
 
 function spawnPoint(){
   if (view === 'walk'){ const a = rad(S.viewer.a); return { x:S.viewer.x + Math.cos(a)*150, y:S.viewer.y + Math.sin(a)*150 }; }
@@ -1693,7 +1911,8 @@ Rules:
 - Example of a cabinet with an outward-opening door hinged on the left:
 {"name":"Skåp","w":60,"d":40,"h":80,"color":"#ffffff","parts":[{"s":"box","x":0,"y":40,"z":-1,"w":60,"h":80,"d":38},{"s":"box","x":0,"y":40,"z":19,"w":60,"h":80,"d":2,"j":"door"},{"s":"box","x":25,"y":50,"z":21,"w":2,"h":12,"d":2,"c":"#333333","j":"door"}],"joints":[{"id":"door","label":"Dörr","type":"rotate","axis":"y","pivot":[-30,0,20],"from":0,"to":-100}]}
 - For a wall bed (sängskåp): build the cabinet, define the bed lying DOWN in front of the cabinet (extending toward +z), joint axis "x" with pivot at the bottom front of the cabinet, "from": -90 (stowed upright inside the cabinet), "to": 0. "w","d","h" describe the cabinet. Make sure the upright bed fits inside the cabinet.
-- For a drop-leaf table: hinged leaves on joint axis "z" (or "x") hanging down at state 0 and level at state 1.`;
+- For a drop-leaf table: hinged leaves on joint axis "z" (or "x") hanging down at state 0 and level at state 1.
+- Lamps and anything that gives light: add "lights":[{"x":..,"y":..,"z":.. (bulb position), "c": light colour (default warm "#ffd29a"), "i": intensity (0.5 small table lamp, 1 floor lamp, 1.4 ceiling lamp), "r": reach in cm (300-700), "j": optional joint id}] (at most 4 lights), and mark glowing parts (bulbs, lampshades, diffusers, glass globes) with "e":1. Shape the lamp so its style is recognisable (shade shape, arm, base, cord, number of arms/bulbs). A ceiling-hung lamp: let "h" be the room height 250 so the top of the item touches the ceiling. A wall-mounted item: add "elev": height in cm of its bottom above the floor.`;
 
 function aiPill(){ const p = $('#aiPill'); p.textContent = AI.sample ? (AI.images ? 'Claude: text + bild' : 'Claude: text') : 'Claude: ej ansluten'; p.classList.toggle('on', !!AI.sample); $('#bPhoto').disabled = !AI.images; $('#bUlAi').disabled = !AI.images; if (sel?.kind === 'furn') renderInspector(); }
 async function initAI(){
@@ -1729,6 +1948,8 @@ let aiBusy = false;
 async function createFromText(){
   const text = $('#aiText').value.trim(), st = $('#aiStatus');
   if (pendingImage) return createFromImage(pendingImage, text);
+  const url = (text.match(/https?:\/\/[^\s<>"']+/i) || [])[0];
+  if (url) return createFromLink(url, text.replace(url, '').trim());
   if (!text){ st.textContent = 'Skriv vad du vill skapa, t.ex. “garderob 80x60x200 vit”.'; return; }
   if (aiBusy) return;
   st.className = 'status';
@@ -1743,6 +1964,22 @@ async function createFromText(){
     if (e?.code === 'not_granted' || e?.code === 'rate_limited'){ const d = parseLocal(text); placeNew(d); }
   } finally { aiBusy = false; $('#bCreate').disabled = false; }
 }
+const LINK_PROMPT = (url, note) => `\n\nThe user gave a link to a product page: ${url}
+You cannot open the link. Identify the product from the URL itself (shop/brand, product name, series, variant and article number in the path) and from your own knowledge of that product: its type, style, number of seats and cushions, arms, legs or plinth, doors, drawers, its usual dimensions and the colour named in the URL. If you do not recognise the exact product, model a typical item of the type and style the URL indicates.
+Also add "note": one short Swedish sentence (max 160 characters) saying which product you modelled and how sure you are of the dimensions, and "src": "${url}".
+User's note (Swedish; dimensions/colour given here take precedence over everything): ${note || '(none)'}`;
+async function createFromLink(url, note){
+  const st = $('#aiStatus'); st.className = 'status';
+  if (!AI.sample){ st.className = 'status err'; st.textContent = 'Länkar kräver att sidan öppnas i Claude.'; return; }
+  if (aiBusy) return; aiBusy = true; $('#bCreate').disabled = true; st.textContent = 'Claude känner igen produkten…';
+  try {
+    const res = await AI.sample.json(FURN_PROMPT + LINK_PROMPT(url, note), { modelTier:'complex', onText: ({ text }) => { st.textContent = `Claude modellerar… ${text.length} tecken`; } });
+    const d = sanitizeDef(Object.assign({}, res, { src:url })); placeNew(d); S.library.unshift(d); renderLibrary(); changed();
+    st.textContent = (typeof res.note === 'string' && res.note ? res.note.slice(0, 200) + ' ' : `Klar: ${d.name}. `) + 'Kontrollera måtten mot produktsidan.';
+    $('#aiText').value = '';
+  } catch (e) { st.className = 'status err'; st.textContent = aiErr(e); }
+  finally { aiBusy = false; $('#bCreate').disabled = false; }
+}
 let pendingImage = null;
 async function createFromImage(file, text){
   const st = $('#aiStatus'); st.className = 'status';
@@ -1752,9 +1989,10 @@ async function createFromImage(file, text){
     st.textContent = 'Förbereder bilden…';
     const im = await shrinkImage(file);
     st.textContent = 'Claude tittar på bilden…';
-    const res = await AI.sample.json(FURN_PROMPT + `\n\nThe attached photo shows ONE piece of furniture. Model it: match its type, proportions and the distinguishing details (count cushions, arm width, legs, doors, drawers, etc.) and its main colour. Estimate realistic dimensions if not given. User's note (Swedish; dimensions/colour given here take precedence): ${text || '(none)'}`,
+    const res = await AI.sample.json(FURN_PROMPT + `\n\nThe attached photo shows ONE piece of furniture. Model it: match its type, proportions and the distinguishing details (count cushions, arm width, legs, doors, drawers, etc.) and its main colour. Estimate realistic dimensions if not given. User's note (Swedish; dimensions/colour given here take precedence): ${text || '(none)'}` + ((text.match(/https?:\/\/\S+/) || [])[0] ? `\nThe note contains a link to the product page; use the product name/article number in it together with the photo, and add "src" with that link.` : ''),
       { images:[im.blob], modelTier:'complex', onText: ({ text }) => { st.textContent = `Claude modellerar… ${text.length} tecken`; } });
-    const d = sanitizeDef(res); placeNew(d); S.library.unshift(d); renderLibrary(); changed();
+    const lnk = (text.match(/https?:\/\/[^\s<>"']+/) || [])[0];
+    const d = sanitizeDef(lnk ? Object.assign({}, res, { src:lnk }) : res); placeNew(d); S.library.unshift(d); renderLibrary(); changed();
     st.textContent = `Klar: ${d.name}, ${d.parts.length} delar.`; $('#aiText').value = ''; clearPending();
   } catch (e) { st.className = 'status err'; st.textContent = aiErr(e); }
   finally { aiBusy = false; $('#bCreate').disabled = false; }
@@ -1838,7 +2076,7 @@ User hint (Swedish): ${$('#ulHint').value || '(none)'}`;
 /* ============================== settings ============================== */
 function syncSettingsUI(){
   const s = S.settings;
-  $('#defT').value = s.defT; $('#defH').value = s.defH; $('#sEye').value = s.eye; $('#sSnap').value = s.snap;
+  $('#defT').value = s.defT; $('#defH').value = s.defH; $('#sEye').value = s.height; eyeHint(); $('#sSnap').value = s.snap;
   $('#sFloor').value = s.floor; $('#sWall').value = s.wall; $('#sCeil').checked = s.ceiling; $('#sCollide').checked = s.collide; $('#sDims').checked = s.dims;
   $('#projName').value = S.name || '';
   $('#ulCtl').hidden = !S.underlay;
@@ -1847,7 +2085,9 @@ function syncSettingsUI(){
 const setS = (k, v, rebuild) => { S.settings[k] = v; if (rebuild) buildWalls(); changed(); };
 $('#defT').addEventListener('change', e => setS('defT', clamp(num(e.target.value, 12), 1, 200)));
 $('#defH').addEventListener('change', e => setS('defH', clamp(num(e.target.value, 250), 50, 1000)));
-$('#sEye').addEventListener('change', e => setS('eye', clamp(num(e.target.value, 170), 50, 250)));
+const eyeStand = () => S.settings.height * 166/179, eyeSit = () => S.settings.height * 79/179;
+function eyeHint(){ $('#eyeHint').textContent = `Ögonhöjd: ${Math.round(eyeStand())} cm stående, ${Math.round(eyeSit())} cm över sittytan när du sitter.`; }
+$('#sEye').addEventListener('change', e => { setS('height', clamp(num(e.target.value, 179), 80, 230)); eyeHint(); });
 $('#sSnap').addEventListener('change', e => setS('snap', clamp(num(e.target.value, 5), 1, 50)));
 $('#sFloor').addEventListener('input', e => setS('floor', e.target.value, true));
 $('#sWall').addEventListener('input', e => setS('wall', e.target.value, true));
@@ -1862,6 +2102,7 @@ function changed(){ reqPlan(); scheduleSave(); }
 function setView(v){
   if (v !== 'plan' && !ok3d){ toast('3D kräver WebGL, som inte är tillgängligt i den här webbläsaren.'); return; }
   if (view === 'walk' && document.pointerLockElement) document.exitPointerLock?.();
+  if (v !== 'walk') walk.seated = null;
   view = v;
   $('#vPlan').setAttribute('aria-pressed', v === 'plan'); $('#v3d').setAttribute('aria-pressed', v === '3d'); $('#vWalk').setAttribute('aria-pressed', v === 'walk');
   planCv.hidden = v !== 'plan'; c3.hidden = v === 'plan';
@@ -1873,7 +2114,7 @@ function setView(v){
   if (v === '3d'){ const bb = wallsBBox(); orbit.tx = (bb.minx+bb.maxx)/2; orbit.tz = (bb.miny+bb.maxy)/2; orbit.dist = Math.max(bb.maxx-bb.minx, bb.maxy-bb.miny)*1.25 + 200; }
   walkHelp(); showTip(); reqPlan();
 }
-function walkHelp(){ $('#walkHelpText').innerHTML = document.pointerLockElement === c3 ? '<kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> gå · mus tittar · <kbd>Shift</kbd> fortare · <kbd>E</kbd> fäll/öppna · <kbd>Esc</kbd> släpp musen' : 'Klicka i bilden för att styra med musen · eller dra för att titta · <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> gå'; }
+function walkHelp(){ $('#walkHelpText').innerHTML = document.pointerLockElement === c3 ? '<kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> gå · mus tittar · <kbd>Shift</kbd> fortare · <kbd>E</kbd> använd · <kbd>C</kbd> sätt dig/res dig · <kbd>Esc</kbd> släpp musen' : 'Klicka i bilden för att styra med musen · eller dra för att titta · <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> gå'; }
 $('#vPlan').addEventListener('click', () => setView('plan'));
 $('#v3d').addEventListener('click', () => setView('3d'));
 $('#vWalk').addEventListener('click', () => setView('walk'));
@@ -1914,7 +2155,7 @@ c3.addEventListener('pointerdown', e => {
   if (view === 'walk'){
     if (painting && document.pointerLockElement === c3){ const r = c3.getBoundingClientRect(); paint3D(r.left + r.width/2, r.top + r.height/2); return; }
     if (e.pointerType === 'mouse' && c3.requestPointerLock && document.pointerLockElement !== c3){ try { const r = c3.requestPointerLock(); if (r && r.catch) r.catch(() => {}); } catch {} }
-    od = { kind:'look', x:e.clientX, y:e.clientY, x0:e.clientX, y0:e.clientY, paint:painting && e.pointerType !== 'mouse' }; c3.setPointerCapture(e.pointerId); return;
+    od = { kind:'look', x:e.clientX, y:e.clientY, x0:e.clientX, y0:e.clientY, paint:painting && e.pointerType !== 'mouse' }; try { c3.setPointerCapture(e.pointerId); } catch {} return;
   }
   c3.setPointerCapture(e.pointerId);
   if (painting && e.button === 0){ od = { kind:'orbit', x:e.clientX, y:e.clientY, x0:e.clientX, y0:e.clientY, moved:false, paint:true }; return; }
@@ -1944,16 +2185,48 @@ c3.addEventListener('pointerup', e => {
   if (od?.kind === 'move' && od.moved){ changed(); renderInspector(); } if (od?.kind === 'orbit' && !od.moved && view === '3d') select(null); od = null; });
 c3.addEventListener('contextmenu', e => e.preventDefault());
 c3.addEventListener('wheel', e => { if (view !== '3d') return; e.preventDefault(); orbit.dist = clamp(orbit.dist * Math.exp(e.deltaY*0.0012), 80, 8000); }, { passive:false });
-c3.addEventListener('dblclick', e => { if (view !== '3d' || tool !== 'select') return; const h = pick(e.clientX, e.clientY); if (h?.door) toggleDoor(h.door); else if (h?.f && !toggleJoints(h.f)) toast(`${h.f.name} har inga rörliga delar.`); });
+c3.addEventListener('dblclick', e => { if (view !== '3d' || tool !== 'select') return; const h = pick(e.clientX, e.clientY); if (h?.door) toggleDoor(h.door); else if (h?.f) interact(h.f); });
 document.addEventListener('pointerlockchange', walkHelp);
 document.addEventListener('mousemove', e => {
   if (view !== 'walk' || document.pointerLockElement !== c3) return;
   S.viewer.a += e.movementX * 0.13; walk.pitch = clamp(walk.pitch - e.movementY*0.0023, -1.4, 1.4);
 });
+$('#dpad').addEventListener('click', e => { if (e.target.closest('[data-sit]')) sitToggle(); if (e.target.closest('[data-use]')) useAimed(); });
 $('#dpad').addEventListener('pointerdown', e => { const b = e.target.closest('[data-k]'); if (b){ keys.add(b.dataset.k); b.setPointerCapture(e.pointerId); } });
 ['pointerup','pointercancel'].forEach(t => $('#dpad').addEventListener(t, e => { const b = e.target.closest('[data-k]'); if (b) keys.delete(b.dataset.k); }));
 
-const walk = { pitch:-0.05, hover:null, saveT:0 };
+const walk = { pitch:-0.05, hover:null, saveT:0, seated:null, eye:null };
+const seatRay = new THREE.Raycaster(), DOWN = new THREE.Vector3(0, -1, 0), _o = new THREE.Vector3();
+function surfaceAt(root, x, z){ seatRay.set(_o.set(x, 500, z), DOWN); const hs = seatRay.intersectObject(root, true); return hs.length ? hs[0].point.y : null; }
+// The seat is the lowest sittable surface (25-110 cm) near where you aim, so aiming at a backrest or armrest still seats you on the cushion.
+function findSeat(f, P){
+  const root = furnObjs.get(f.id); if (!root) return null; root.updateMatrixWorld(true);
+  const c = [];
+  for (let dx = -60; dx <= 60; dx += 8) for (let dz = -60; dz <= 60; dz += 8){
+    if (dx*dx + dz*dz > 3600) continue;
+    const y = surfaceAt(root, P.x + dx, P.z + dz); if (y !== null && y >= 25 && y <= 110) c.push({ x:P.x + dx, z:P.z + dz, y, d:Math.hypot(dx, dz) });
+  }
+  if (!c.length) return null;
+  const minY = Math.min(...c.map(q => q.y));
+  return c.filter(q => q.y <= minY + 3).sort((a, b) => a.d - b.d)[0];
+}
+function aimed(){ const r = c3.getBoundingClientRect(); return pick(r.left + r.width/2, r.top + r.height/2); }
+function sitToggle(){
+  if (walk.seated) return standUp();
+  const h = aimed();
+  if (!h?.f || h.d > 300){ toast('Sikta på en stol, soffa eller säng och tryck C.'); return; }
+  const seat = findSeat(h.f, h.point);
+  if (!seat){ toast(`Det går inte att sitta på ${h.f.name}.`); return; }
+  walk.seated = { y:seat.y, name:h.f.name };
+  S.viewer.x = r1(seat.x); S.viewer.y = r1(seat.z);
+  if (h.f.d < 150){ const fr = rad(h.f.rot); S.viewer.a = deg(Math.atan2(Math.cos(fr), -Math.sin(fr))); } // face the front of chairs and sofas
+  walk.pitch = -0.1; reqPlan(); scheduleSave();
+}
+function standUp(){
+  if (!walk.seated) return; walk.seated = null;
+  const a = rad(S.viewer.a), p = { x:S.viewer.x + Math.cos(a)*55, y:S.viewer.y + Math.sin(a)*55 }; collide(p); S.viewer.x = p.x; S.viewer.y = p.y; reqPlan();
+}
+function useAimed(){ const h = aimed(); if (!h || h.d > 350) return; if (h.door) toggleDoor(h.door); else if (h.f) interact(h.f); }
 function collide(p){
   if (!S.settings.collide) return;
   const R = 22;
@@ -1971,21 +2244,26 @@ function stepWalk(dt){
   let fx = 0, fy = 0;
   if (keys.has('KeyW') || keys.has('ArrowUp')) fy += 1; if (keys.has('KeyS') || keys.has('ArrowDown')) fy -= 1;
   if (keys.has('KeyD') || keys.has('ArrowRight')) fx += 1; if (keys.has('KeyA') || keys.has('ArrowLeft')) fx -= 1;
+  if ((fx || fy) && walk.seated){ standUp(); fx = fy = 0; }
   if (fx || fy){
     const L = Math.hypot(fx, fy); fx /= L; fy /= L;
     const p = { x:v.x + (Math.cos(a)*fy - Math.sin(a)*fx)*sp, y:v.y + (Math.sin(a)*fy + Math.cos(a)*fx)*sp };
     collide(p); v.x = p.x; v.y = p.y; reqPlan();
     walk.saveT += dt; if (walk.saveT > 1){ walk.saveT = 0; scheduleSave(); }
   }
-  const eye = S.settings.eye;
+  const tEye = walk.seated ? walk.seated.y + eyeSit() : eyeStand();
+  if (walk.eye === null) walk.eye = tEye; walk.eye += (tEye - walk.eye)*Math.min(1, dt*5);
+  const eye = walk.eye;
   cam.position.set(v.x, eye, v.y);
   cam.lookAt(v.x + Math.cos(a)*Math.cos(walk.pitch)*100, eye + Math.sin(walk.pitch)*100, v.y + Math.sin(a)*Math.cos(walk.pitch)*100);
   // hover info
   const r = c3.getBoundingClientRect(), h = pick(r.left + r.width/2, r.top + r.height/2);
   const near = h && h.d < 350, f = near ? h.f : null, door = near ? h.door : null; walk.hover = f || (door ? { door } : null);
   const wi = $('#walkInfo');
-  if (door){ wi.hidden = false; wi.textContent = 'Dörr · E: ' + ((door.open ?? 1) > 0.5 ? 'stäng' : 'öppna'); }
-  else if (f){ wi.hidden = false; wi.textContent = f.name + ((f.def.joints || []).length ? ' · E: ' + (((f.def.joints.reduce((s, j) => s + (f.j[j.id] || 0), 0) / f.def.joints.length) > 0.5) ? 'fäll upp/stäng' : 'fäll ned/öppna') : ''); }
+  if (walk.seated && !door && !(f && (isLampF(f) || (f.def.joints || []).length))){ wi.hidden = false; wi.textContent = `Du sitter på ${walk.seated.name} · C eller W: res dig`; }
+  else if (door){ wi.hidden = false; wi.textContent = 'Dörr · E: ' + ((door.open ?? 1) > 0.5 ? 'stäng' : 'öppna'); }
+  else if (f && isLampF(f)){ wi.hidden = false; wi.textContent = f.name + ' · E: ' + (f.on !== false ? 'släck' : 'tänd'); }
+  else if (f){ wi.hidden = false; wi.textContent = f.name + ((f.def.joints || []).length ? ' · E: ' + (((f.def.joints.reduce((s, j) => s + (f.j[j.id] || 0), 0) / f.def.joints.length) > 0.5) ? 'fäll upp/stäng' : 'fäll ned/öppna') : '') + (f.h > 30 && f.h < 140 ? ' · C: sätt dig' : ''); }
   else wi.hidden = true;
 }
 function stepOrbit(){
@@ -2004,7 +2282,8 @@ document.addEventListener('keydown', e => {
   if (mod && e.code === 'KeyY'){ e.preventDefault(); redo(); return; }
   if (view === 'walk'){
     if (['KeyW','KeyA','KeyS','KeyD','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','ShiftLeft','ShiftRight'].includes(e.code)){ keys.add(e.code); e.preventDefault(); }
-    if (e.code === 'KeyE' && walk.hover){ if (walk.hover.door) toggleDoor(walk.hover.door); else toggleJoints(walk.hover); }
+    if (e.code === 'KeyC'){ sitToggle(); return; }
+    if (e.code === 'KeyE' && walk.hover){ if (walk.hover.door) toggleDoor(walk.hover.door); else interact(walk.hover); }
     if (e.key === 'Escape' && tool !== 'select') setTool('select');
     return;
   }
@@ -2055,8 +2334,11 @@ function modal(html){ const m = document.createElement('div'); m.className = 'mo
 async function exportFile(){
   const data = JSON.stringify({ app:'hemplan3d', version:1, exported:new Date().toISOString(), state:JSON.parse(serialize(true)) });
   const fname = (S.name || 'lagenhet').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase() + '.hemplan.json';
+  await saveFile(fname, data, 'Exporterad som ' + fname);
+}
+async function saveFile(fname, data, okMsg){
   if (AI.downloads){
-    try { await AI.downloads.save({ filename:fname, data:new Blob([data], { type:'application/json' }) }); toast('Exporterad som ' + fname); return; }
+    try { await AI.downloads.save({ filename:fname, data:new Blob([data], { type:'application/json' }) }); toast(okMsg); return; }
     catch (e) { if (e?.code === 'declined'){ toast('Exporten avbröts.'); return; } }
   }
   // fallback: ordinary download (works when the file is opened directly) + copyable text
@@ -2173,7 +2455,7 @@ window.addEventListener('hashchange', checkHash);
 
 /* ============================== boot ============================== */
 function afterLoad(fit){
-  rebuildAll(); syncSettingsUI(); renderTools(); renderLibrary(); renderInspector(); renderSwatches(); syncSunUI(); updUndo();
+  rebuildAll(); syncSettingsUI(); renderTools(); renderLibrary(); renderInspector(); renderSwatches(); syncSunUI(); updUndo(); applyCollapse($('#left'));
   if (fit) fitPlan();
 }
 let last = performance.now();
@@ -2198,6 +2480,7 @@ function start(snapshot){
   new MutationObserver(() => { reqPlan(); setSky(); }).observe(document.documentElement, { attributes:true, attributeFilter:['data-theme'] });
   window.claude?.hot?.snapshot?.(() => ({ state: JSON.parse(serialize(true)) }));
   setTimeout(initAI, 0);
+  setTimeout(loadShared, 0);
   if (/^#hem-/i.test(location.hash)) checkHash();
 }
 const hot = window.claude?.hot;
