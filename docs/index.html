@@ -78,6 +78,10 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
 .sec.collapsed > :not(h3){display:none!important}
 .sec.collapsed{padding-block:10px}
 .dpad .act{font-size:12px;font-weight:600}
+.vrow{display:grid;grid-template-columns:76px minmax(0,1fr) auto;gap:8px;align-items:start;padding-top:8px;border-top:1px solid var(--line)}
+.vrow img{width:76px;height:52px;object-fit:cover;border-radius:4px;border:1px solid var(--line);background:var(--field)}
+.vrow .grid2{gap:4px 6px}
+.vrow .x{border:0;background:transparent;color:var(--muted);cursor:pointer;font-size:16px;padding:0 2px}
 .tools{display:grid;grid-template-columns:repeat(4,1fr);gap:4px}
 .tool{display:grid;justify-items:center;gap:2px;padding:7px 2px 5px;border:1px solid var(--line);border-radius:var(--r);background:var(--field);color:var(--ink);font:inherit;font-size:11px;cursor:pointer}
 .tool svg{width:20px;height:20px}
@@ -232,7 +236,15 @@ input[type=range]{width:100%;accent-color:var(--accent)}
           <button class="btn small" id="bEvening">Kvällsläge</button>
           <button class="btn small" id="bLampsOn">Tänd alla lampor</button>
           <button class="btn small" id="bLampsOff">Släck alla</button>
+          <button class="btn small" id="bRoomLamps" title="Kortkommando L">Rummets lampor (L)</button>
         </div>
+      </section>
+
+      <section class="sec">
+        <h3>Utsikt genom fönstren</h3>
+        <div class="row"><button class="btn small" id="bView">Ladda upp foton…</button><input type="file" id="fView" accept="image/*" multiple hidden></div>
+        <div id="viewList"></div>
+        <div class="hint">Ta ett foto, gärna panorama, ut genom fönstret åt varje håll och ange vart kameran pekade. Bilden läggs runt lägenheten i rätt väderstreck och syns genom fönstren när du går runt. Justera bildvinkel och horisont tills det ser rätt ut.</div>
       </section>
 
       <section class="sec">
@@ -596,7 +608,7 @@ function defaultState(){
   const st = { app:'hemplan3d', version:1, name:'Exempellägenhet', walls, openings, furniture:[], library:[],
     viewer:{ x:400, y:580, a:-90 },
     settings:{ height:179, snap:5, floor:'#c8a273', wall:'#f3f1ec', ceiling:true, collide:true, dims:true, defT:12, defH:250 },
-    underlay:null, north:0, floorPaint:[], sun:defaultSun() };
+    underlay:null, north:0, floorPaint:[], views:[], sun:defaultSun() };
   const add = (def, x, y, rot, j) => { const f = makeInstance(def, x, y, rot); if (j) f.j = j; st.furniture.push(f); };
   add(genSofa(218,90,82,3,14,'#696964'), 240, 58, 0);
   add(genRug(200,140,'#d8cfc0'), 240, 175, 0);
@@ -616,6 +628,7 @@ function normalizeState(o){
   const d = defaultState();
   o.openings = Array.isArray(o.openings) ? o.openings : [];
   o.floorPaint = Array.isArray(o.floorPaint) ? o.floorPaint : [];
+  o.views = Array.isArray(o.views) ? o.views : [];
   o.library = Array.isArray(o.library) ? o.library : [];
   const hadHeight = o.settings && o.settings.height;
   o.settings = Object.assign({}, d.settings, o.settings || {});
@@ -631,18 +644,42 @@ let saveTimer = 0, saveWarned = false;
 function scheduleSave(){
   if (sharedMode) return;
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => {
-    try { localStorage.setItem(STORE_KEY, serialize(true)); }
+  saveTimer = setTimeout(async () => {
+    const idbOk = await saveImages();
+    try { localStorage.setItem(STORE_KEY, serialize(!idbOk)); }
     catch (e) {
-      try { localStorage.setItem(STORE_KEY, serialize(false)); if (!saveWarned) { toast('Planritningsbilden är för stor för att sparas i webbläsaren. Exportera för att behålla den.'); saveWarned = true; } } catch {}
+      try { localStorage.setItem(STORE_KEY, serialize(false)); if (!saveWarned) { toast('Bilderna är för stora för att sparas i webbläsaren. Exportera för att behålla dem.'); saveWarned = true; } } catch {}
     }
   }, 400);
+}
+// Large images (floor plan, window views) are kept in IndexedDB; the plan itself in localStorage.
+const IMGDB = {};
+function idbOpen(){
+  if (IMGDB.p) return IMGDB.p;
+  return (IMGDB.p = new Promise(res => { try { const r = indexedDB.open('hemplan3d', 1); r.onupgradeneeded = () => r.result.createObjectStore('img'); r.onsuccess = () => res(r.result); r.onerror = () => res(null); } catch { res(null); } }));
+}
+async function idbPut(k, v){ const db = await idbOpen(); if (!db) throw new Error('no idb'); await new Promise((res, rej) => { const t = db.transaction('img', 'readwrite'), st = t.objectStore('img'); if (v == null) st.delete(k); else st.put(v, k); t.oncomplete = res; t.onerror = () => rej(t.error); }); }
+async function idbGet(k){ const db = await idbOpen(); if (!db) return null; return new Promise(res => { try { const r = db.transaction('img').objectStore('img').get(k); r.onsuccess = () => res(r.result ?? null); r.onerror = () => res(null); } catch { res(null); } }); }
+const savedImgs = new Map();
+function imageEntries(){ const m = new Map(); if (S.underlay) m.set('ul', S.underlay.src || null); (S.views || []).forEach(v => m.set('v:' + v.id, v.src || null)); return m; }
+async function saveImages(){
+  let ok = true; const imgs = imageEntries();
+  for (const [k, src] of imgs){ if (src && savedImgs.get(k) !== src){ try { await idbPut(k, src); savedImgs.set(k, src); } catch { ok = false; } } }
+  for (const k of [...savedImgs.keys()]) if (!imgs.has(k)){ savedImgs.delete(k); idbPut(k, null).catch(() => {}); }
+  return ok;
+}
+async function hydrateImages(){
+  let changed3 = false;
+  if (S.underlay && !S.underlay.src){ const v = await idbGet('ul'); if (v){ S.underlay.src = v; savedImgs.set('ul', v); reqPlan(); syncSettingsUI(); renderTools(); } }
+  for (const v of S.views || []){ if (!v.src){ const d = await idbGet('v:' + v.id); if (d){ v.src = d; savedImgs.set('v:' + v.id, d); changed3 = true; } } else savedImgs.set('v:' + v.id, v.src); }
+  if (S.underlay?.src) savedImgs.set('ul', S.underlay.src);
+  renderViews(); if (changed3) buildViews();
 }
 
 /* undo */
 const undoStack = [], redoStack = [];
 function pushUndo(){ undoStack.push(serialize(false)); if (undoStack.length > 120) undoStack.shift(); redoStack.length = 0; updUndo(); }
-function restoreSnap(json){ const src = S.underlay?.src; S = normalizeState(JSON.parse(json)); if (S.underlay && src && !S.underlay.src) S.underlay.src = src; afterLoad(false); }
+function restoreSnap(json){ const src = S.underlay?.src, vs = new Map((S.views || []).map(v => [v.id, v.src])); S = normalizeState(JSON.parse(json)); if (S.underlay && src && !S.underlay.src) S.underlay.src = src; S.views.forEach(v => { if (!v.src && vs.get(v.id)) v.src = vs.get(v.id); }); afterLoad(false); }
 function undo(){ if (!undoStack.length) return; redoStack.push(serialize(false)); restoreSnap(undoStack.pop()); updUndo(); scheduleSave(); }
 function redo(){ if (!redoStack.length) return; undoStack.push(serialize(false)); restoreSnap(redoStack.pop()); updUndo(); scheduleSave(); }
 function updUndo(){ $('#bUndo').disabled = !undoStack.length; $('#bRedo').disabled = !redoStack.length; }
@@ -678,6 +715,7 @@ function wallsBBox(){
 }
 
 /* ============================== 3D ============================== */
+let viewsG = null;
 let renderer = null, scene, cam, wallsG, furnG, floorMesh, ceilMesh, hemi, dirL, ambientL, ok3d = true;
 const furnObjs = new Map();
 const matCache = new Map();
@@ -726,7 +764,7 @@ function init3D(){
   dirL = new THREE.DirectionalLight(0xffffff, 0.55);
   dirL.castShadow = true; dirL.shadow.mapSize.set(2048, 2048); dirL.shadow.bias = -0.0005;
   scene.add(dirL); scene.add(dirL.target);
-  wallsG = new THREE.Group(); furnG = new THREE.Group(); scene.add(wallsG, furnG);
+  wallsG = new THREE.Group(); furnG = new THREE.Group(); viewsG = new THREE.Group(); viewsG.visible = false; scene.add(wallsG, furnG, viewsG);
   floorMesh = new THREE.Mesh(new THREE.PlaneGeometry(1,1), mat('#c8a273')); floorMesh.rotation.x = -Math.PI/2; floorMesh.receiveShadow = true; scene.add(floorMesh);
   ceilMesh = new THREE.Mesh(new THREE.BoxGeometry(1,10,1), mat('#fbfaf7')); scene.add(ceilMesh);
   dirL.shadow.normalBias = 0.6;
@@ -790,7 +828,7 @@ function buildWalls(){
   const bb = wallsBBox(), cx = (bb.minx+bb.maxx)/2, cy = (bb.miny+bb.maxy)/2, W = bb.maxx-bb.minx, H = bb.maxy-bb.miny;
   ceilMesh.scale.set(W, 1, H); ceilMesh.position.set(cx, (maxH || 250) + 3, cy);
   scene3d = { cx, cy, W, H };
-  updateSun();
+  updateSun(); buildViews();
   scheduleFloor();
 }
 const doorDir = (w, side, along, open) => { const g = wg(w), th = clamp(open ?? 1, 0, 1)*Math.PI/2; return { x: Math.cos(th)*g.ux*along + Math.sin(th)*g.nx*side, y: Math.cos(th)*g.uy*along + Math.sin(th)*g.ny*side }; };
@@ -1208,7 +1246,7 @@ planCv.addEventListener('pointermove', e => {
     case 'furn': { once(); const f = drag.f; f.x = r1(drag.ox + (p.x - drag.x)); f.y = r1(drag.oy + (p.y - drag.y)); if (!e.altKey){ f.x = Math.round(f.x); f.y = Math.round(f.y); } updateFurnPose(f); break; }
     case 'rot': { once(); const f = drag.f; let a = deg(Math.atan2(p.y - f.y, p.x - f.x)) - 90; const st = e.altKey ? 1 : (e.shiftKey ? 45 : 15); f.rot = ((Math.round(a/st)*st) % 360 + 360) % 360; updateFurnPose(f); break; }
     case 'viewer': S.viewer.x = r1(drag.ox + (p.x - drag.x)); S.viewer.y = r1(drag.oy + (p.y - drag.y)); break;
-    case 'north': { once(); const c = compassPos(); let a = deg(Math.atan2(p.px - c.x, -(p.py - c.y))); const st = e.altKey ? 1 : 5; S.north = ((Math.round(a/st)*st) % 360 + 360) % 360; $('#sunNorth').value = S.north; updateSun(); break; }
+    case 'north': { once(); const c = compassPos(); let a = deg(Math.atan2(p.px - c.x, -(p.py - c.y))); const st = e.altKey ? 1 : 5; S.north = ((Math.round(a/st)*st) % 360 + 360) % 360; $('#sunNorth').value = S.north; updateSun(); buildViews(); break; }
     case 'open': { once(); const G = wg(drag.w); const r = segDist(p, drag.w.a, drag.w.b); drag.o.off = clamp(Math.round(r.s/ (e.altKey?1:g))*(e.altKey?1:g), drag.o.w/2, G.len - drag.o.w/2); buildWalls(); break; }
     case 'end': { once(); const q = snapPt(p, { exclude:drag.pts, from:(drag.w.a === drag.pts[0] ? drag.w.b : drag.w.a), free:e.altKey }); drag.pts.forEach(pt => { pt.x = q.x; pt.y = q.y; }); S.walls.forEach(clampOpenings); buildWalls(); break; }
     case 'wall': { once(); let dx = p.x - drag.x, dy = p.y - drag.y; if (!e.altKey){ dx = Math.round(dx/g)*g; dy = Math.round(dy/g)*g; } drag.pts.forEach(o => { o.q.x = r1(o.x + dx); o.q.y = r1(o.y + dy); }); S.walls.forEach(clampOpenings); buildWalls(); break; }
@@ -1406,7 +1444,8 @@ function helpHTML(){
   <section class="sec"><h3>Kortkommandon</h3><dl class="keys">
     <dt><kbd>R</kbd> / <kbd>⇧R</kbd></dt><dd>Vrid möbel 90° åt höger / vänster</dd>
     <dt><kbd>Del</kbd></dt><dd>Ta bort markerat</dd>
-    <dt><kbd>Ctrl</kbd>+<kbd>D</kbd></dt><dd>Duplicera möbel</dd>
+    <dt><kbd>D</kbd></dt><dd>Duplicera möbel</dd>
+    <dt><kbd>L</kbd></dt><dd>Tänd/släck lamporna i rummet där du står</dd>
     <dt>Piltangenter</dt><dd>Flytta 1 cm (⇧ 10 cm)</dd>
     <dt><kbd>Ctrl</kbd>+<kbd>Z</kbd></dt><dd>Ångra</dd>
     <dt><kbd>V</kbd> <kbd>W</kbd> <kbd>N</kbd></dt><dd>Markera, Vägg, Rum</dd>
@@ -1415,7 +1454,7 @@ function helpHTML(){
   </dl></section>
   <section class="sec"><h3>Gå runt</h3><dl class="keys">
     <dt><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></dt><dd>Gå</dd><dt>Mus</dt><dd>Titta (klicka först)</dd>
-    <dt><kbd>Shift</kbd></dt><dd>Gå fortare</dd><dt><kbd>E</kbd></dt><dd>Tänd/släck, fäll ned/upp, öppna/stäng</dd><dt><kbd>C</kbd></dt><dd>Sätt dig / res dig (sikta på stol, soffa eller säng)</dd><dt><kbd>Esc</kbd></dt><dd>Släpp musen</dd>
+    <dt><kbd>Shift</kbd></dt><dd>Gå fortare</dd><dt><kbd>E</kbd></dt><dd>Tänd/släck, fäll ned/upp, öppna/stäng</dd><dt><kbd>C</kbd></dt><dd>Sätt dig / res dig (sikta på stol, soffa eller säng)</dd><dt><kbd>L</kbd></dt><dd>Tänd/släck lamporna i rummet</dd><dt><kbd>Esc</kbd></dt><dd>Släpp musen</dd>
   </dl><div class="hint">Den orange pricken i planen är var du står. Dra den för att flytta dig.</div></section>`;
 }
 let lenMode = 'stretch';
@@ -1605,14 +1644,14 @@ function updateSun(){
       Object.assign(dirL.shadow.camera, { left:-r, right:r, top:r, bottom:-r, near:100, far:6500 }); dirL.shadow.camera.updateProjectionMatrix();
       dirL.intensity = el > 0 ? 0.6 + 1.5*clamp(el/15, 0, 1) : 0;
       dirL.color.setRGB(1, 0.72 + 0.26*up, 0.48 + 0.44*up);
-      hemi.intensity = 0.16 + 0.5*day; ambientL.intensity = 0.06 + 0.06*day;
+      hemi.intensity = 0.16 + 0.5*day; ambientL.intensity = 0.06 + 0.06*day; dimViews(clamp((el + 8)/14, 0.1, 1));
       const night = new THREE.Color('#141b2b'), dusk = new THREE.Color('#e3a77c'), sky = new THREE.Color('#9cc3e4');
       scene.background = el < -6 ? night : el < 0 ? night.clone().lerp(dusk, (el + 6)/6) : el < 10 ? dusk.clone().lerp(sky, el/10) : sky;
     } else {
       dirL.position.set(cx - W*0.25, 900, cy - H*0.35); dirL.target.position.set(cx, 0, cy);
       const r = Math.max(W, H)*0.75;
       Object.assign(dirL.shadow.camera, { left:-r, right:r, top:r, bottom:-r, near:10, far:3000 }); dirL.shadow.camera.updateProjectionMatrix();
-      dirL.intensity = 0.55; dirL.color.setRGB(1,1,1); hemi.intensity = 0.75; ambientL.intensity = 0.18; setSky();
+      dirL.intensity = 0.55; dirL.color.setRGB(1,1,1); hemi.intensity = 0.75; ambientL.intensity = 0.18; setSky(); dimViews(1);
     }
     applyCeiling();
   }
@@ -1663,6 +1702,7 @@ function drawCompass(ctx, col, W){
     ctx.beginPath(); ctx.arc(d.x*(c.r-4), d.y*(c.r-4), 5, 0, 7); ctx.fillStyle = up ? '#f2b630' : col.muted; ctx.fill();
   }
   ctx.rotate(rad(S.north));
+  (S.views || []).forEach(v => { ctx.save(); ctx.rotate(rad(v.bearing)); ctx.fillStyle = col.ink; ctx.globalAlpha = .55; ctx.fillRect(-4, -c.r - 4, 8, 4); ctx.restore(); });
   ctx.beginPath(); ctx.moveTo(0, -c.r + 5); ctx.lineTo(6, 2); ctx.lineTo(0, -2); ctx.lineTo(-6, 2); ctx.closePath(); ctx.fillStyle = col.accent; ctx.fill();
   ctx.beginPath(); ctx.moveTo(0, c.r - 7); ctx.lineTo(4, 2); ctx.lineTo(-4, 2); ctx.closePath(); ctx.fillStyle = col.muted; ctx.fill();
   ctx.font = `600 11px ${css('--f-mono')}`; ctx.fillStyle = col.accent; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
@@ -1681,7 +1721,7 @@ $('#sunOn').addEventListener('change', e => { S.sun.on = e.target.checked; if (!
 $('#sunPlace').addEventListener('change', e => { const p = PLACES.find(q => q[0] === e.target.value); if (p){ S.sun.place = p[0]; S.sun.lat = p[1]; S.sun.lon = p[2]; } else S.sun.place = 'Annan'; syncSunUI(); scheduleSave(); });
 $('#sunLat').addEventListener('change', e => { S.sun.lat = clamp(num(e.target.value, 59.33), -89, 89); sunChanged(true); });
 $('#sunLon').addEventListener('change', e => { S.sun.lon = clamp(num(e.target.value, 18.07), -180, 180); sunChanged(true); });
-$('#sunNorth').addEventListener('change', e => { pushUndo(); S.north = ((num(e.target.value, 0) % 360) + 360) % 360; e.target.value = S.north; sunChanged(false); });
+$('#sunNorth').addEventListener('change', e => { pushUndo(); S.north = ((num(e.target.value, 0) % 360) + 360) % 360; e.target.value = S.north; sunChanged(false); buildViews(); });
 $('#sunTime').addEventListener('input', e => { S.sun.time = num(e.target.value, 12); sunPlaying = false; $('#sunPlay').textContent = '▶'; updateSun(); scheduleSave(); });
 $('#sunDate').addEventListener('change', e => { if (/^\d{4}-\d{2}-\d{2}$/.test(e.target.value)){ S.sun.date = e.target.value; sunChanged(true); } });
 $('#sunPlay').addEventListener('click', () => { sunPlaying = !sunPlaying; if (sunPlaying && S.sun.time >= 23.9) S.sun.time = 0; $('#sunPlay').textContent = sunPlaying ? '❚❚' : '▶'; });
@@ -1694,9 +1734,26 @@ document.querySelectorAll('[data-sunday]').forEach(b => b.addEventListener('clic
 
 function toggleLight(f){ f.on = f.on === false; applyLight(f, furnObjs.get(f.id)); reqPlan(); scheduleSave(); if (sel?.kind === 'furn' && sel.id === f.id) renderInspector(); }
 function interact(f){ if (isLampF(f)) toggleLight(f); else if (!toggleJoints(f)) toast(`${f.name} har inga rörliga delar.`); }
+// Lamps in the room where you stand (the orange marker / your position when walking)
+function lampInRoom(f, reg){
+  const a = rad(f.rot), pts = [[f.x, f.y], [f.x - Math.sin(a)*f.d*0.6, f.y + Math.cos(a)*f.d*0.6]];
+  (f._lights || []).forEach(([lx, lz]) => pts.push([f.x + lx*Math.cos(a) - lz*Math.sin(a), f.y + lx*Math.sin(a) + lz*Math.cos(a)]));
+  return pts.some(([x, y]) => inMask(reg, x, y));
+}
+function toggleRoomLights(){
+  const reg = regionAt(S.viewer);
+  if (!reg || reg.edge){ toast('Ställ dig i ett rum först. Den orange pricken i planen visar var du står.'); return; }
+  const lamps = S.furniture.filter(f => isLampF(f) && lampInRoom(f, reg));
+  if (!lamps.length){ toast('Det finns inga lampor i rummet där du står.'); return; }
+  const anyOn = lamps.some(f => f.on !== false);
+  lamps.forEach(f => { f.on = !anyOn; applyLight(f, furnObjs.get(f.id)); });
+  reqPlan(); scheduleSave(); renderInspector();
+  toast(`${anyOn ? 'Släckte' : 'Tände'} ${lamps.length} ${lamps.length === 1 ? 'lampa' : 'lampor'} i rummet.`);
+}
 function setAllLamps(on){ let n = 0; S.furniture.forEach(f => { if (isLampF(f)){ f.on = on; applyLight(f, furnObjs.get(f.id)); n++; } }); reqPlan(); scheduleSave(); renderInspector(); return n; }
 $('#bLampsOn').addEventListener('click', () => { if (!setAllLamps(true)) toast('Det finns inga lampor ännu. Lägg till en från biblioteket eller skapa en med Claude.'); });
 $('#bLampsOff').addEventListener('click', () => setAllLamps(false));
+$('#bRoomLamps').addEventListener('click', toggleRoomLights);
 $('#bEvening').addEventListener('click', () => {
   S.sun.on = true; $('#sunOn').checked = true; sunRiseSet();
   const set = sunRiseSet.last?.set; S.sun.time = set !== null && set !== undefined ? Math.min(23.5, Math.round((set + 1.25)*4)/4) : 21;
@@ -1704,6 +1761,74 @@ $('#bEvening').addEventListener('click', () => {
   toast(n ? `Kväll kl ${hm(S.sun.time)}, ${n} lampor tända.` : `Kväll kl ${hm(S.sun.time)}. Lägg till lampor från biblioteket.`);
   if (view === 'plan') setView('walk');
 });
+
+/* ============================== window views ============================== */
+const DIRS = [['N', 0, 'norr'], ['NO', 45, 'nordost'], ['O', 90, 'öster'], ['SO', 135, 'sydost'], ['S', 180, 'söder'], ['SV', 225, 'sydväst'], ['V', 270, 'väster'], ['NV', 315, 'nordväst']];
+const viewTex = new Map();
+const VIEW_R = 3000;
+function buildViews(){
+  if (!ok3d || !viewsG) return;
+  viewsG.children.forEach(m => { m.geometry.dispose(); m.material.dispose(); }); while (viewsG.children.length) viewsG.remove(viewsG.children[0]);
+  const ids = new Set((S.views || []).map(v => v.id));
+  for (const [id, t] of viewTex) if (!ids.has(id)){ t.tex.dispose(); viewTex.delete(id); }
+  const { cx, cy } = scene3d;
+  (S.views || []).forEach(v => {
+    if (!v.src) return;
+    let t = viewTex.get(v.id);
+    if (!t || t.src !== v.src){
+      if (t) t.tex.dispose();
+      const tex = new THREE.TextureLoader().load(v.src); tex.encoding = THREE.sRGBEncoding; tex.wrapS = THREE.RepeatWrapping; tex.repeat.x = -1; tex.offset.x = 1; tex.anisotropy = 4;
+      t = { src:v.src, tex }; viewTex.set(v.id, t);
+    }
+    const span = rad(clamp(v.fov || 90, 10, 360)), aspect = (v.natW || 2)/(v.natH || 1), H = VIEW_R*span/aspect;
+    const b = rad(S.north + v.bearing), th = Math.atan2(Math.sin(b), -Math.cos(b));
+    const geo = new THREE.CylinderGeometry(VIEW_R, VIEW_R, H, Math.max(8, Math.round(span*20)), 1, true, th - span/2, span);
+    const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ map:t.tex, side:THREE.BackSide, depthWrite:false }));
+    m.position.set(cx, eyeStand() + (v.horizon || 0)/100*H, cy); m.renderOrder = -1;
+    viewsG.add(m);
+  });
+  dimViews(viewDim);
+}
+let viewDim = 1;
+function dimViews(k){ viewDim = k; viewsG?.children.forEach(m => m.material.color.setScalar(k)); }
+function renderViews(){
+  const el = $('#viewList'); if (!el) return;
+  el.innerHTML = (S.views || []).map(v => `<div class="vrow" data-vid="${v.id}">
+    ${v.src ? `<img src="${v.src}" alt="Utsikt mot ${esc((DIRS.find(d => d[1] === v.bearing) || [, , v.bearing + '°'])[2])}">` : '<img alt="Bilden saknas">'}
+    <div class="grid2">
+      <label class="f">Kameran pekade mot<select data-vk="dir">${DIRS.map(([n, b, full]) => `<option value="${b}" ${v.bearing === b ? 'selected' : ''}>${n} · ${full}</option>`).join('')}${DIRS.some(d => d[1] === v.bearing) ? '' : `<option value="${v.bearing}" selected>${v.bearing}°</option>`}</select></label>
+      <label class="f">Exakt riktning °<input type="number" data-vk="bearing" value="${v.bearing}" step="1"></label>
+      <label class="f">Bildvinkel °<input type="number" data-vk="fov" value="${v.fov}" min="10" max="360" step="5"></label>
+      <label class="f">Horisont<input type="range" data-vk="horizon" min="-60" max="60" step="1" value="${v.horizon || 0}"></label>
+    </div>
+    <button class="x" data-vdel aria-label="Ta bort fotot">×</button></div>`).join('') || '';
+}
+$('#bView').addEventListener('click', () => $('#fView').click());
+$('#fView').addEventListener('change', async e => {
+  const files = [...e.target.files]; e.target.value = ''; if (!files.length) return;
+  pushUndo();
+  for (const file of files){
+    try {
+      const im = await shrinkImage(file, 4096), used = new Set(S.views.map(v => v.bearing));
+      const bearing = [0, 90, 180, 270, 45, 135, 225, 315].find(b => !used.has(b)) ?? 0;
+      S.views.push({ id:uid(), src:im.dataUrl, natW:im.w, natH:im.h, bearing, fov:clamp(Math.round(im.w/im.h*50/5)*5, 40, 360), horizon:0 });
+    } catch { toast('En bild kunde inte läsas.'); }
+  }
+  renderViews(); buildViews(); changed();
+  toast('Fotot är inlagt. Ange vilket håll kameran pekade åt och gå runt för att se det genom fönstren.');
+});
+$('#viewList').addEventListener('input', e => onViewField(e, false));
+$('#viewList').addEventListener('change', e => onViewField(e, true));
+$('#viewList').addEventListener('click', e => { const b = e.target.closest('[data-vdel]'); if (!b) return; const id = b.closest('[data-vid]').dataset.vid; confirmBtn(b, 'Ta bort?', () => { pushUndo(); S.views = S.views.filter(v => v.id !== id); renderViews(); buildViews(); changed(); }); });
+function onViewField(e, commit){
+  const k = e.target.dataset.vk; if (!k) return;
+  const v = S.views.find(q => q.id === e.target.closest('[data-vid]').dataset.vid); if (!v) return;
+  if (k === 'horizon'){ v.horizon = num(e.target.value, 0); buildViews(); if (commit) scheduleSave(); return; }
+  if (!commit) return;
+  if (k === 'dir' || k === 'bearing') v.bearing = ((Math.round(num(e.target.value, 0)) % 360) + 360) % 360;
+  if (k === 'fov') v.fov = clamp(num(e.target.value, 90), 10, 360);
+  renderViews(); buildViews(); changed();
+}
 
 /* ============================== collapsible panel sections ============================== */
 const COLL_KEY = 'hemplan3d.collapsed';
@@ -2087,7 +2212,7 @@ $('#defT').addEventListener('change', e => setS('defT', clamp(num(e.target.value
 $('#defH').addEventListener('change', e => setS('defH', clamp(num(e.target.value, 250), 50, 1000)));
 const eyeStand = () => S.settings.height * 166/179, eyeSit = () => S.settings.height * 79/179;
 function eyeHint(){ $('#eyeHint').textContent = `Ögonhöjd: ${Math.round(eyeStand())} cm stående, ${Math.round(eyeSit())} cm över sittytan när du sitter.`; }
-$('#sEye').addEventListener('change', e => { setS('height', clamp(num(e.target.value, 179), 80, 230)); eyeHint(); });
+$('#sEye').addEventListener('change', e => { setS('height', clamp(num(e.target.value, 179), 80, 230)); eyeHint(); buildViews(); });
 $('#sSnap').addEventListener('change', e => setS('snap', clamp(num(e.target.value, 5), 1, 50)));
 $('#sFloor').addEventListener('input', e => setS('floor', e.target.value, true));
 $('#sWall').addEventListener('input', e => setS('wall', e.target.value, true));
@@ -2103,6 +2228,7 @@ function setView(v){
   if (v !== 'plan' && !ok3d){ toast('3D kräver WebGL, som inte är tillgängligt i den här webbläsaren.'); return; }
   if (view === 'walk' && document.pointerLockElement) document.exitPointerLock?.();
   if (v !== 'walk') walk.seated = null;
+  if (viewsG) viewsG.visible = v === 'walk';
   view = v;
   $('#vPlan').setAttribute('aria-pressed', v === 'plan'); $('#v3d').setAttribute('aria-pressed', v === '3d'); $('#vWalk').setAttribute('aria-pressed', v === 'walk');
   planCv.hidden = v !== 'plan'; c3.hidden = v === 'plan';
@@ -2114,7 +2240,7 @@ function setView(v){
   if (v === '3d'){ const bb = wallsBBox(); orbit.tx = (bb.minx+bb.maxx)/2; orbit.tz = (bb.miny+bb.maxy)/2; orbit.dist = Math.max(bb.maxx-bb.minx, bb.maxy-bb.miny)*1.25 + 200; }
   walkHelp(); showTip(); reqPlan();
 }
-function walkHelp(){ $('#walkHelpText').innerHTML = document.pointerLockElement === c3 ? '<kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> gå · mus tittar · <kbd>Shift</kbd> fortare · <kbd>E</kbd> använd · <kbd>C</kbd> sätt dig/res dig · <kbd>Esc</kbd> släpp musen' : 'Klicka i bilden för att styra med musen · eller dra för att titta · <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> gå'; }
+function walkHelp(){ $('#walkHelpText').innerHTML = document.pointerLockElement === c3 ? '<kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> gå · mus tittar · <kbd>Shift</kbd> fortare · <kbd>E</kbd> använd · <kbd>C</kbd> sätt dig/res dig · <kbd>L</kbd> lampor i rummet · <kbd>Esc</kbd> släpp musen' : 'Klicka i bilden för att styra med musen · eller dra för att titta · <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> gå'; }
 $('#vPlan').addEventListener('click', () => setView('plan'));
 $('#v3d').addEventListener('click', () => setView('3d'));
 $('#vWalk').addEventListener('click', () => setView('walk'));
@@ -2283,13 +2409,15 @@ document.addEventListener('keydown', e => {
   if (view === 'walk'){
     if (['KeyW','KeyA','KeyS','KeyD','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','ShiftLeft','ShiftRight'].includes(e.code)){ keys.add(e.code); e.preventDefault(); }
     if (e.code === 'KeyC'){ sitToggle(); return; }
+    if (e.code === 'KeyL'){ toggleRoomLights(); return; }
     if (e.code === 'KeyE' && walk.hover){ if (walk.hover.door) toggleDoor(walk.hover.door); else interact(walk.hover); }
     if (e.key === 'Escape' && tool !== 'select') setTool('select');
     return;
   }
   if (e.code === 'Space'){ spaceDown = true; if (view === 'plan') e.preventDefault(); return; }
-  if (mod && e.code === 'KeyD' && sel?.kind === 'furn'){ e.preventDefault(); const f = furnById(sel.id); if (f) duplicate(f); return; }
   if (mod) return;
+  if (e.code === 'KeyL' && !e.shiftKey && !e.altKey){ toggleRoomLights(); return; }
+  if (e.code === 'KeyD' && !e.shiftKey && !e.altKey && sel?.kind === 'furn' && !(tool === 'wall' && wallDraw.pts.length)){ e.preventDefault(); const f = furnById(sel.id); if (f) duplicate(f); return; }
   if (tool === 'wall' && wallDraw.pts.length){
     if (/^[0-9]$/.test(e.key) || e.key === ',' || e.key === '.'){ wallDraw.typed += e.key === '.' ? ',' : e.key; reqPlan(); e.preventDefault(); return; }
     if (e.key === 'Backspace' && wallDraw.typed){ wallDraw.typed = wallDraw.typed.slice(0, -1); reqPlan(); e.preventDefault(); return; }
@@ -2382,7 +2510,7 @@ async function unpack(d){
   if (d.enc === 'gz64'){ const bin = atob(d.z), u = Uint8Array.from(bin, c => c.charCodeAt(0)); return JSON.parse(await new Response(new Blob([u]).stream().pipeThrough(new DecompressionStream('gzip'))).text()); }
   return JSON.parse(d.z);
 }
-function shareSnapshot(){ const o = JSON.parse(serialize(false)); delete o.underlay; delete o.library; delete o.shareId; return o; }
+function shareSnapshot(){ const o = JSON.parse(serialize(false)); delete o.underlay; delete o.library; delete o.shareId; o.views = []; return o; }
 const shareLink = id => APP_URL + '#hem-' + id;
 function openShare(){
   const m = modal(`<b>Dela din möblerade lägenhet</b>
@@ -2432,7 +2560,7 @@ function leaveShared(){
   sharedMode = null; banner('');
   try { history.replaceState(null, '', location.pathname + location.search); } catch { location.hash = ''; }
   let loaded = null; try { const raw = localStorage.getItem(STORE_KEY); if (raw){ const o = JSON.parse(raw); if (validState(o)) loaded = o; } } catch {}
-  S = loaded ? normalizeState(loaded) : defaultState(); sel = null; undoStack.length = 0; redoStack.length = 0; afterLoad(true);
+  S = loaded ? normalizeState(loaded) : defaultState(); sel = null; undoStack.length = 0; redoStack.length = 0; afterLoad(true); hydrateImages();
 }
 async function checkHash(){
   const m = location.hash.match(/^#hem-([a-z0-9]{4,40})$/i);
@@ -2455,7 +2583,7 @@ window.addEventListener('hashchange', checkHash);
 
 /* ============================== boot ============================== */
 function afterLoad(fit){
-  rebuildAll(); syncSettingsUI(); renderTools(); renderLibrary(); renderInspector(); renderSwatches(); syncSunUI(); updUndo(); applyCollapse($('#left'));
+  rebuildAll(); syncSettingsUI(); renderTools(); renderLibrary(); renderInspector(); renderSwatches(); syncSunUI(); updUndo(); renderViews(); applyCollapse($('#left'));
   if (fit) fitPlan();
 }
 let last = performance.now();
@@ -2473,7 +2601,7 @@ function start(snapshot){
   if (snapshot && validState(snapshot)) loaded = snapshot;
   else { try { const raw = localStorage.getItem(STORE_KEY); if (raw){ const o = JSON.parse(raw); if (validState(o)) loaded = o; } } catch {} }
   S = loaded ? normalizeState(loaded) : defaultState();
-  afterLoad(false);
+  afterLoad(false); hydrateImages();
   requestAnimationFrame(() => { fitPlan(); requestAnimationFrame(loop); });
   if (!ok3d){ $('#v3d').disabled = true; $('#vWalk').disabled = true; }
   matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', () => { reqPlan(); setSky(); });
