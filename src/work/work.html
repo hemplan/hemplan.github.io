@@ -1,0 +1,19 @@
+<!--@LEFT-->
+      <section class="sec">
+        <h3>Utrustning <span class="pill" id="devCount">0</span></h3>
+        <div class="devtypes" id="devTypes"></div>
+        <div class="hint">Välj typ och klicka i planen. Nära en vägg fästs utrustningen på väggen och riktas in i rummet.</div>
+        <div class="grid2">
+          <label class="f">Analyshöjd (cm)<input type="number" id="devTarget" min="0" max="300" step="10"></label>
+          <label class="f inline" style="align-self:end"><input type="checkbox" id="devShow"> Visa täckning</label>
+        </div>
+        <div class="devlist" id="devList"></div>
+        <div class="row"><button class="btn small" id="bDevCsv">Exportera utrustningslista</button></div>
+      </section>
+<!--@END-->
+<!--@STAGE-->
+      <div class="pip" id="pip" hidden>
+        <canvas id="pipCanvas"></canvas>
+        <div class="pipbar"><span id="pipInfo"></span><button class="btn small" id="pipSize" aria-label="Större kamerabild">⤢</button></div>
+      </div>
+<!--@END-->

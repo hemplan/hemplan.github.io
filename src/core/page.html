@@ -1,0 +1,185 @@
+<title>{{TITLE}}</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@600&display=swap">
+<style>
+{{CSS}}
+</style>
+
+<div class="app">
+  <header>
+    <div class="brand">{{TITLE}} <small>cm</small></div>
+    <input id="projName" type="text" aria-label="Projektnamn" value="Min lägenhet">
+    <div class="seg" role="group" aria-label="Vy">
+      <button id="vPlan" aria-pressed="true">Planritning</button>
+      <button id="v3d" aria-pressed="false">3D-vy</button>
+      <button id="vWalk" aria-pressed="false">Gå runt</button>
+    </div>
+    <div class="spacer"></div>
+    <div class="hgroup">
+      <button class="btn" id="bUndo" title="Ångra (Ctrl+Z)">Ångra</button>
+      <button class="btn" id="bRedo" title="Gör om (Ctrl+Y)">Gör om</button>
+      <button class="btn primary" id="bShare">Dela länk</button>
+      <button class="btn" id="bExport">Exportera</button>
+      <button class="btn" id="bImport">Importera</button>
+      <button class="btn" id="bNew">Ny</button>
+    </div>
+  </header>
+  <div class="banner" id="shareBanner" hidden></div>
+
+  <main class="work">
+    <aside class="panel" id="left">
+      <section class="sec">
+        <h3>Verktyg <span class="pill" id="toolName">Markera</span></h3>
+        <div class="tools" id="tools"></div>
+        <div class="grid2">
+          <label class="f">Ny väggs tjocklek<input type="number" id="defT" min="1" step="1"></label>
+          <label class="f">Vägghöjd<input type="number" id="defH" min="50" step="1"></label>
+        </div>
+        <div class="hint" id="toolHint"></div>
+      </section>
+<!--@SLOT:LEFT-->
+      <section class="sec">
+        <h3>Färg på väggar och golv</h3>
+        <div class="row"><input type="color" id="brush" aria-label="Penselfärg"><input type="text" id="brushText" style="flex:1" aria-label="Penselfärg som hex eller namn"></div>
+        <div class="swatches" id="swatches"></div>
+        <div class="grid2">
+          <button class="tool wide" data-tool="paintwall" aria-pressed="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="4" width="14" height="6" rx="1"/><path d="M17 7h3v5h-8v3"/><rect x="10.5" y="15" width="3" height="6" rx="1"/></svg>Måla vägg</button>
+          <button class="tool wide" data-tool="paintfloor" aria-pressed="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 17l9-5 9 5-9 5z"/><path d="M7 15l9 5M11 13l9 5" opacity=".6"/></svg>Måla golv</button>
+        </div>
+        <label class="f inline"><input type="checkbox" id="paintRoom" checked> Måla alla väggar i rummet på en gång</label>
+        <div class="hint">Klicka på den sida av väggen du vill måla, eller inne i ett rum för att byta golv. Fungerar i planen, i 3D-vyn och när du går runt. Rutan med × återställer.</div>
+        <div class="grid2">
+          <label class="f inline"><input type="color" id="sFloor"> Standardgolv</label>
+          <label class="f inline"><input type="color" id="sWall"> Standardvägg</label>
+        </div>
+      </section>
+
+      <section class="sec">
+        <h3>Sol och ljus <span class="pill" id="sunPill">av</span></h3>
+        <label class="f inline"><input type="checkbox" id="sunOn"> Simulera solljuset genom fönstren</label>
+        <div class="grid2">
+          <label class="f">Ort<select id="sunPlace"></select></label>
+          <label class="f">Norr (° medurs från uppåt)<input type="number" id="sunNorth" step="1"></label>
+        </div>
+        <div class="grid2" id="sunLatLon">
+          <label class="f">Latitud<input type="number" id="sunLat" step="0.01" min="-89" max="89"></label>
+          <label class="f">Longitud<input type="number" id="sunLon" step="0.01" min="-180" max="180"></label>
+        </div>
+        <div class="hint">Vrid kompassen uppe till höger i planen tills <b>N</b> pekar mot norr, eller skriv in gradtalet. På en planritning finns ofta en nordpil.</div>
+        <div class="row">
+          <button class="btn small" data-sunday="12-21">Midvinter</button>
+          <button class="btn small" data-sunday="03-20">Vårdagjämning</button>
+          <button class="btn small" data-sunday="06-21">Midsommar</button>
+          <button class="btn small" data-sunday="today">Idag</button>
+        </div>
+        <div class="status" id="sunRise"></div>
+        <div class="row">
+          <button class="btn small" id="bEvening">Kvällsläge</button>
+          <button class="btn small" id="bLampsOn">Tänd alla lampor</button>
+          <button class="btn small" id="bLampsOff">Släck alla</button>
+          <button class="btn small" id="bRoomLamps" title="Kortkommando L">Rummets lampor (L)</button>
+        </div>
+      </section>
+
+      <section class="sec">
+        <h3>Utsikt genom fönstren</h3>
+        <div class="row"><button class="btn small" id="bView">Ladda upp foton…</button><input type="file" id="fView" accept="image/*" multiple hidden></div>
+        <div id="viewList"></div>
+        <div class="hint">Ta ett foto, gärna panorama, ut genom fönstret åt varje håll och ange vart kameran pekade. Bilden läggs runt lägenheten i rätt väderstreck och syns genom fönstren när du går runt. Justera bildvinkel och horisont tills det ser rätt ut.</div>
+      </section>
+
+      <section class="sec">
+        <h3>Skapa möbel <span class="pill" id="aiPill">Claude: ansluter…</span></h3>
+        <textarea id="aiText" placeholder="t.ex. tresitssoffa 218x80x80 #696964&#10;eller klistra in en länk till en produktsida"></textarea>
+        <div class="row">
+          <button class="btn primary" id="bCreate">Skapa</button>
+          <button class="btn" id="bPhoto">Från bild…</button>
+          <input type="file" id="fPhoto" accept="image/*" hidden>
+        </div>
+        <div class="hint">Mått anges bredd × djup × höjd. Du kan klistra in en bild eller en länk till en produktsida direkt i rutan. Beskriv gärna detaljer: antal kuddar, breda armstöd, “kan fällas ned”.</div>
+        <div class="status" id="aiStatus"></div>
+      </section>
+
+      <section class="sec">
+        <h3>Bibliotek</h3>
+        <div class="row">
+          <button class="btn small" id="bLibExport">Exportera mina möbler</button>
+          <button class="btn small" id="bLibImport">Importera möbler</button>
+          <input type="file" id="fLibImport" accept=".json,application/json" hidden>
+        </div>
+        <div class="lib" id="libMine"></div>
+        <div class="lib" id="libShared"></div>
+        <div class="lib" id="libBuiltin"></div>
+      </section>
+
+      <section class="sec">
+        <h3>Planritning som underlag</h3>
+        <div class="row">
+          <button class="btn" id="bUl">Ladda upp bild…</button>
+          <input type="file" id="fUl" accept="image/*" hidden>
+        </div>
+        <div id="ulCtl" hidden>
+          <div class="grid2">
+            <label class="f">Synlighet<input type="range" id="ulOp" min="0.05" max="1" step="0.05"></label>
+            <label class="f">cm per pixel<input type="number" id="ulScale" step="0.01" min="0.01"></label>
+          </div>
+          <div class="row" style="margin-top:6px">
+            <button class="btn small" id="bUlAi">Rita väggar med Claude</button>
+            <button class="btn small danger" id="bUlDel">Ta bort bild</button>
+          </div>
+          <label class="f" style="margin-top:6px">Känt mått för Claude (valfritt)<input type="text" id="ulHint" placeholder="t.ex. vardagsrummet är 4,2 m brett"></label>
+          <div class="hint" style="margin-top:4px">Skala bilden med verktyget <b>Kalibrera</b>: klicka på två punkter med känt avstånd. Flytta den med <b>Flytta bild</b>.</div>
+        </div>
+        <div class="status" id="ulStatus"></div>
+      </section>
+
+      <section class="sec">
+        <h3>Inställningar</h3>
+        <div class="grid2">
+          <label class="f">Din längd (cm)<input type="number" id="sEye" min="80" max="230"></label>
+          <label class="f">Rutnät/snäpp (cm)<input type="number" id="sSnap" min="1" max="50"></label>
+        </div>
+        <div class="hint" id="eyeHint"></div>
+        <label class="f inline"><input type="checkbox" id="sCeil"> Tak när du går runt</label>
+        <label class="f inline"><input type="checkbox" id="sCollide"> Kan inte gå genom väggar</label>
+        <label class="f inline"><input type="checkbox" id="sDims"> Visa väggmått i planen</label>
+      </section>
+    </aside>
+
+    <div class="stage" id="stage">
+      <canvas id="cPlan"></canvas>
+      <canvas id="c3d" hidden></canvas>
+      <div class="tiphud" id="tip" hidden></div>
+      <div class="hud" id="hud"></div>
+      <div class="zoom" id="zoomBtns">
+        <button class="btn" id="zIn" aria-label="Zooma in">+</button>
+        <button class="btn" id="zOut" aria-label="Zooma ut">−</button>
+        <button class="btn" id="zFit" aria-label="Visa allt" title="Visa allt">⤢</button>
+      </div>
+      <div class="cross" id="cross" hidden></div>
+      <div class="walkinfo" id="walkInfo" hidden></div>
+      <div class="walkhelp" id="walkHelp" hidden><div id="walkHelpText"></div></div>
+      <div class="sunbar" id="sunbar" hidden>
+        <button class="btn small" id="sunPlay" aria-label="Spela upp dagen">▶</button>
+        <input type="range" id="sunTime" min="0" max="24" step="0.0833" aria-label="Klockslag">
+        <span class="si" id="sunInfo"></span>
+        <input type="date" id="sunDate" aria-label="Datum">
+      </div>
+<!--@SLOT:STAGE-->
+      <div class="dpad" id="dpad">
+        <button class="act" data-sit>Sitt</button><button data-k="KeyW">▲</button><button class="act" data-use>E</button>
+        <button data-k="KeyA">◀</button><button data-k="KeyS">▼</button><button data-k="KeyD">▶</button>
+      </div>
+    </div>
+
+    <aside class="panel" id="insp"></aside>
+  </main>
+</div>
+<input type="file" id="fImport" accept=".json,application/json" hidden>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+{{JS}}
+</script>
