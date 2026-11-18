@@ -3,7 +3,7 @@
 // Which build this is. build.py replaces the object between the markers for each variant.
 const VARIANT = /*@VARIANT*/{"id":"home","title":"Hemplan 3D","appUrl":"","storeKey":"hemplan3d.v1","idb":"hemplan3d","collapseKey":"hemplan3d.collapsed","templates":"templates.json"}/*@END*/;
 // Extension points. The home build leaves them empty; the work build (src/work/work.js) adds cameras and alarm devices through them.
-const HOOKS = { normalize:[], afterLoad:[], planUnder:[], planOver:[], hit:[], toolClick:[], inspector:[], field:[], act:[], del:[], dup:[], key:[], build:[], frame:[], view:[], tools:[], select:[], preframe:[] };
+const HOOKS = { normalize:[], afterLoad:[], planUnder:[], planOver:[], hit:[], toolClick:[], inspector:[], field:[], act:[], del:[], dup:[], key:[], build:[], frame:[], view:[], tools:[], select:[], preframe:[], floor:[], floorVis:[] };
 const runHooks = (k, ...a) => { for (const f of HOOKS[k]) f(...a); };
 const firstHook = (k, ...a) => { for (const f of HOOKS[k]){ const r = f(...a); if (r) return r; } return null; };
 /* ============================== helpers ============================== */
@@ -168,6 +168,12 @@ function genWallLamp(W=18, D=22, H=30, color='#2e2e2e', name){
     B(0, 6, -D/2+1, 10, 16, 2), B(0, 12, -D/2+6, 2, 2, 10), C(0, 4, D/2-W/2, W, 22, { c:'#f2ece0', e:1 }) ],
     lights:[{ x:0, y:14, z:D/2-W/2, c:WARM, i:0.6, r:400 }] };
 }
+// Straight stair: the bottom step is at the front (+z), the top at the back (-z). h = floor-to-floor height.
+function genStairs(W=90, L=270, H=280, color='#b98f62', name){
+  const n = Math.max(3, Math.round(H/18)), r = H/n, g = L/n, p = [];
+  for (let i = 0; i < n; i++) p.push(B(0, 0, L/2 - g*(i + 0.5), W, r*(i + 1), g));
+  return { name: name || 'Trappa', w:W, d:L, h:H, color, parts:p, joints:[], stair:{ n } };
+}
 function genBox(W=60, D=60, H=60, color='#bbbbbb', name){
   return { name: name || 'Möbel', w:W, d:D, h:H, color, joints:[], parts:[B(0, 0, 0, W, H, D)] };
 }
@@ -192,6 +198,7 @@ const BUILTINS = [
   { label:'Taklampa', make:() => genPendant() },
   { label:'Plafond', make:() => genCeilingLamp() },
   { label:'Vägglampa', make:() => genWallLamp() },
+  { label:'Trappa (rak)', make:() => genStairs() },
 ];
 
 function parseLocal(text){
@@ -204,6 +211,7 @@ function parseLocal(text){
   name = name ? name[0].toUpperCase() + name.slice(1) : '';
   const nm = name || undefined, c = (d) => color || d;
   const has = (...k) => k.some(x => t.includes(x));
+  if (has('trappa')) return genStairs(W||90, D||270, H||280, c('#b98f62'), nm);
   if (has('golvlampa','läslampa','stålampa')) return genFloorLamp(W||42, H||160, c('#2e2e2e'), nm);
   if (has('bordslampa','fönsterlampa','sänglampa')) return genTableLamp(W||30, H||50, c('#c9b79c'), nm);
   if (has('plafond')) return genCeilingLamp(W||35, H||250, c('#ffffff'), nm);
@@ -257,6 +265,7 @@ function sanitizeDef(d){
   parts.forEach(p => { minx=Math.min(minx,p.x-p.w/2); maxx=Math.max(maxx,p.x+p.w/2); miny=Math.min(miny,p.y-p.h/2); maxy=Math.max(maxy,p.y+p.h/2); minz=Math.min(minz,p.z-p.d/2); maxz=Math.max(maxz,p.z+p.d/2); });
   return { name: String(d.name || 'Möbel').slice(0, 60), w: clamp(N(d.w, maxx-minx), 1, 3000), d: clamp(N(d.d, maxz-minz), 1, 3000),
     h: clamp(N(d.h, maxy), 0.5, 1000), color: isHex(d.color) ? normHex(d.color) : '#b5b5b0', parts, joints,
+    ...(d.stair ? { stair:{ n:clamp(Math.round(N(d.stair.n, 15)), 2, 60) } } : {}),
     ...(lights.length ? { lights } : {}), ...(typeof d.src === 'string' && /^https?:\/\//.test(d.src) ? { src:d.src.slice(0, 500) } : {}), ...(N(d.elev, 0) > 0 ? { elev: clamp(N(d.elev, 0), 0, 400) } : {}) };
 }
 
@@ -291,11 +300,32 @@ function makeInstance(def, x, y, rot = 0){
   return { id:uid(), def:clone(def), name:def.name, w:def.w, d:def.d, h:def.h, color:def.color, x:r1(x), y:r1(y), rot, elev:def.elev || 0, j:{}, ...((def.lights || []).length ? { on:true } : {}) };
 }
 const serialize = (withSrc = true) => JSON.stringify(S, (k, v) => (k.startsWith('_') || (!withSrc && k === 'src')) ? undefined : v);
-function validState(o){ return o && Array.isArray(o.walls) && Array.isArray(o.furniture); }
+/* ---------- floors ----------
+   Everything that belongs to one floor lives in S.floors[i]. S.walls, S.furniture etc. are
+   accessors that point at the floor being edited (S.curFloor), so 2D code works per floor. */
+const FLOOR_KEYS = ['walls', 'openings', 'furniture', 'floorPaint', 'underlay'];
+const curFl = (o = S) => o.floors.find(f => f.id === o.curFloor) || o.floors[0];
+function attachFloors(o){ FLOOR_KEYS.forEach(k => Object.defineProperty(o, k, { configurable:true, enumerable:false, get(){ return curFl(o)[k]; }, set(v){ curFl(o)[k] = v; } })); }
+function withFloor(fl, fn){ const prev = S.curFloor; S.curFloor = fl.id; try { return fn(fl); } finally { S.curFloor = prev; } }
+const floorsSorted = () => [...S.floors].sort((a, b) => a.elev - b.elev);
+const allFurniture = () => S.floors.flatMap(f => f.furniture);
+const furnFloor = f => S.floors.find(fl => fl.furniture.includes(f));
+function validState(o){ return !!o && (Array.isArray(o.floors) && o.floors.length > 0 || (Array.isArray(o.walls) && Array.isArray(o.furniture))); }
 function normalizeState(o){
   const d = defaultState();
-  o.openings = Array.isArray(o.openings) ? o.openings : [];
-  o.floorPaint = Array.isArray(o.floorPaint) ? o.floorPaint : [];
+  const own = k => { const ds = Object.getOwnPropertyDescriptor(o, k); return ds && 'value' in ds ? ds : null; };
+  if (!Array.isArray(o.floors) || !o.floors.length){
+    const f0 = { id:'f0', name:'Plan 1', elev:0 };
+    FLOOR_KEYS.forEach(k => { const ds = own(k); if (ds) f0[k] = ds.value; delete o[k]; });
+    o.floors = [f0];
+  } else FLOOR_KEYS.forEach(k => { if (own(k)) delete o[k]; });
+  o.floors.forEach((f, i) => {
+    f.id = f.id || ('f' + i); f.name = f.name || ('Plan ' + (i + 1)); f.elev = Number.isFinite(+f.elev) ? +f.elev : 0;
+    FLOOR_KEYS.forEach(k => { if (k === 'underlay'){ if (f[k] === undefined) f[k] = null; } else if (!Array.isArray(f[k])) f[k] = []; });
+    f.furniture.forEach(x => { x.j = x.j || {}; x.elev = x.elev || 0; });
+  });
+  if (!o.floors.some(f => f.id === o.curFloor)) o.curFloor = o.floors[0].id;
+  attachFloors(o);
   o.views = Array.isArray(o.views) ? o.views : [];
   o.meta = Object.assign({ id:newPid(), created:Date.now(), modified:Date.now(), rev:1 }, o.meta || {});
   o.library = Array.isArray(o.library) ? o.library : [];
@@ -305,7 +335,6 @@ function normalizeState(o){
   delete o.settings.eye;
   o.viewer = Object.assign({}, d.viewer, o.viewer || {});
   o.sun = Object.assign(defaultSun(), o.sun || {}); o.north = Number.isFinite(+o.north) ? +o.north : 0;
-  o.furniture.forEach(f => { f.j = f.j || {}; f.elev = f.elev || 0; });
   runHooks('normalize', o);
   return o;
 }
@@ -321,7 +350,7 @@ function saveIndex(){ try { localStorage.setItem(IDX_KEY, JSON.stringify(project
 const entryOf = st => ({ id:st.meta.id, name:st.name || 'Namnlöst', created:st.meta.created, modified:st.meta.modified, rev:st.meta.rev, exportedAt:st.meta.exportedAt || null, exportedRev:st.meta.exportedRev || null });
 function updateIndex(){ const e = entryOf(S), i = projects.findIndex(p => p.id === e.id); if (i >= 0) projects[i] = e; else projects.push(e); saveIndex(); }
 // What counts as a change: everything except where you stand and look, and the time of day
-const contentSig = () => JSON.stringify(S, (k, v) => (k.startsWith('_') || k === 'src' || k === 'viewer' || k === 'meta') ? undefined : v);
+const contentSig = () => JSON.stringify(S, (k, v) => (k.startsWith('_') || k === 'src' || k === 'viewer' || k === 'meta' || k === 'curFloor') ? undefined : v);
 async function persist(){
   if (sharedMode || !S) return;
   const sig = contentSig();
@@ -350,7 +379,7 @@ function idbOpen(){
 async function idbPut(k, v){ const db = await idbOpen(); if (!db) throw new Error('no idb'); await new Promise((res, rej) => { const t = db.transaction('img', 'readwrite'), st = t.objectStore('img'); if (v == null) st.delete(k); else st.put(v, k); t.oncomplete = res; t.onerror = () => rej(t.error); }); }
 async function idbGet(k){ const db = await idbOpen(); if (!db) return null; return new Promise(res => { try { const r = db.transaction('img').objectStore('img').get(k); r.onsuccess = () => res(r.result ?? null); r.onerror = () => res(null); } catch { res(null); } }); }
 const savedImgs = new Map();
-const imgKeys = st => { const pid = st.meta.id, m = new Map(); if (st.underlay) m.set(pid + ':ul', st.underlay.src || null); (st.views || []).forEach(v => m.set(pid + ':v:' + v.id, v.src || null)); return m; };
+const imgKeys = st => { const pid = st.meta.id, m = new Map(); (st.floors || [{ id:'f0', underlay:st.underlay }]).forEach(f => { if (f.underlay) m.set(pid + ':ul:' + f.id, f.underlay.src || null); }); (st.views || []).forEach(v => m.set(pid + ':v:' + v.id, v.src || null)); return m; };
 async function saveImages(){
   let ok = true; const imgs = imgKeys(S);
   for (const [k, src] of imgs){ if (src && savedImgs.get(k) !== src){ try { await idbPut(k, src); savedImgs.set(k, src); } catch { ok = false; } } }
@@ -360,9 +389,15 @@ async function saveImages(){
 // Images of plans saved before projects existed live under the old keys ('ul', 'v:<id>')
 async function hydrateImages(){
   const pid = S.meta.id, legacy = S.meta.legacyImages; let changed3 = false;
-  if (S.underlay && !S.underlay.src){ let v = await idbGet(pid + ':ul'); const fromNew = !!v; if (!v && legacy) v = await idbGet('ul');
-    if (v){ S.underlay.src = v; if (fromNew) savedImgs.set(pid + ':ul', v); reqPlan(); syncSettingsUI(); renderTools(); } }
-  else if (S.underlay?.src) savedImgs.set(pid + ':ul', S.underlay.src);
+  for (const fl of S.floors){
+    const k = pid + ':ul:' + fl.id;
+    if (fl.underlay && !fl.underlay.src){
+      let v = await idbGet(k); const fromNew = !!v;
+      if (!v && fl.id === 'f0') v = await idbGet(pid + ':ul'); // saved before floors existed
+      if (!v && legacy && fl.id === 'f0') v = await idbGet('ul');
+      if (v){ fl.underlay.src = v; if (fromNew) savedImgs.set(k, v); reqPlan(); syncSettingsUI(); renderTools(); }
+    } else if (fl.underlay?.src) savedImgs.set(k, fl.underlay.src);
+  }
   for (const v of S.views || []){
     const k = pid + ':v:' + v.id;
     if (!v.src){ let d = await idbGet(k); const fromNew = !!d; if (!d && legacy) d = await idbGet('v:' + v.id); if (d){ v.src = d; if (fromNew) savedImgs.set(k, d); changed3 = true; } }
@@ -437,15 +472,15 @@ function openProjects(){
 /* undo */
 const undoStack = [], redoStack = [];
 function pushUndo(){ undoStack.push(serialize(false)); if (undoStack.length > 120) undoStack.shift(); redoStack.length = 0; updUndo(); }
-function restoreSnap(json){ const src = S.underlay?.src, vs = new Map((S.views || []).map(v => [v.id, v.src])), meta = S.meta; S = normalizeState(JSON.parse(json)); S.meta = meta; if (S.underlay && src && !S.underlay.src) S.underlay.src = src; S.views.forEach(v => { if (!v.src && vs.get(v.id)) v.src = vs.get(v.id); }); afterLoad(false); }
+function restoreSnap(json){ const uls = new Map(S.floors.map(f => [f.id, f.underlay?.src])), vs = new Map((S.views || []).map(v => [v.id, v.src])), meta = S.meta, cf = S.curFloor; S = normalizeState(JSON.parse(json)); S.meta = meta; if (S.floors.some(f => f.id === cf)) S.curFloor = cf; S.floors.forEach(f => { if (f.underlay && !f.underlay.src && uls.get(f.id)) f.underlay.src = uls.get(f.id); }); S.views.forEach(v => { if (!v.src && vs.get(v.id)) v.src = vs.get(v.id); }); afterLoad(false); }
 function undo(){ if (!undoStack.length) return; redoStack.push(serialize(false)); restoreSnap(undoStack.pop()); updUndo(); scheduleSave(); }
 function redo(){ if (!redoStack.length) return; undoStack.push(serialize(false)); restoreSnap(redoStack.pop()); updUndo(); scheduleSave(); }
 function updUndo(){ $('#bUndo').disabled = !undoStack.length; $('#bRedo').disabled = !redoStack.length; }
 
 /* ============================== geometry helpers ============================== */
 const wallById = id => S.walls.find(w => w.id === id);
-const furnById = id => S.furniture.find(f => f.id === id);
-const openById = id => S.openings.find(o => o.id === id);
+const furnById = id => allFurniture().find(f => f.id === id);
+const openById = id => S.floors.flatMap(f => f.openings).find(o => o.id === id);
 function wg(w){ const dx = w.b.x-w.a.x, dy = w.b.y-w.a.y, len = Math.hypot(dx,dy) || 1e-6, ux = dx/len, uy = dy/len; return { dx, dy, len, ux, uy, nx:-uy, ny:ux }; }
 function endsAt(p, excludeWall){ const r = []; S.walls.forEach(w => { if (w === excludeWall) return; if (dist(w.a,p) < 1) r.push(w.a); if (dist(w.b,p) < 1) r.push(w.b); }); return r; }
 function wallExt(w){
@@ -474,7 +509,8 @@ function wallsBBox(){
 
 /* ============================== 3D ============================== */
 let viewsG = null;
-let renderer = null, scene, cam, wallsG, furnG, floorMesh, ceilMesh, hemi, dirL, ambientL, ok3d = true;
+let floorsG = null;
+let renderer = null, scene, cam, wallsG, furnG, ceilMesh, hemi, dirL, ambientL, ok3d = true;
 const furnObjs = new Map();
 const matCache = new Map();
 const MAX_SHADOW_LAMPS = 6;
@@ -523,7 +559,7 @@ function init3D(){
   dirL.castShadow = true; dirL.shadow.mapSize.set(2048, 2048); dirL.shadow.bias = -0.0005;
   scene.add(dirL); scene.add(dirL.target);
   wallsG = new THREE.Group(); furnG = new THREE.Group(); viewsG = new THREE.Group(); viewsG.visible = false; scene.add(wallsG, furnG, viewsG);
-  floorMesh = new THREE.Mesh(new THREE.PlaneGeometry(1,1), mat('#c8a273')); floorMesh.rotation.x = -Math.PI/2; floorMesh.receiveShadow = true; scene.add(floorMesh);
+  floorsG = new THREE.Group(); scene.add(floorsG);
   ceilMesh = new THREE.Mesh(new THREE.BoxGeometry(1,10,1), mat('#fbfaf7')); scene.add(ceilMesh);
   dirL.shadow.normalBias = 0.6;
 }
@@ -535,13 +571,17 @@ function buildWalls(){
   if (!ok3d){ scheduleFloor(); return; }
   disposeChildren(wallsG); doorGroups.clear();
   const wm = mat(S.settings.wall), frameM = mat('#f7f7f4'), glassM = mat('#a9c7d8', 0.22), doorM = mat('#ecebe6'), metalM = mat('#9a9a96');
+  let tgt = wallsG;
   const addBox = (w, len, s0, y0, y1, thick, m, cast = true) => {
     const g = wg(w), mid = (s0 + len/2);
     const mesh = new THREE.Mesh(new THREE.BoxGeometry(Math.max(0.1,len), Math.max(0.1, y1-y0), thick), m);
     mesh.position.set(w.a.x + g.ux*mid, (y0+y1)/2, w.a.y + g.uy*mid);
     mesh.rotation.y = -Math.atan2(g.uy, g.ux);
-    mesh.castShadow = cast; mesh.receiveShadow = true; wallsG.add(mesh); return mesh;
+    mesh.castShadow = cast; mesh.receiveShadow = true; tgt.add(mesh); return mesh;
   };
+  let ub = null, top = null;
+  floorsSorted().forEach(fl => withFloor(fl, () => {
+  tgt = new THREE.Group(); tgt.position.y = fl.elev; tgt.userData.fl = fl.id; wallsG.add(tgt);
   let maxH = 0;
   S.walls.forEach(w => {
     const g = wg(w), ext = wallExt(w); maxH = Math.max(maxH, w.h);
@@ -575,7 +615,7 @@ function buildWalls(){
           leaf.position.set(leafLen/2, lh/2 + 1, 0); leaf.castShadow = leaf.receiveShadow = true; leaf.userData.oid = o.id;
           grp.add(leaf);
           [-3.5, 3.5].forEach(z => { const hd = new THREE.Mesh(new THREE.BoxGeometry(12, 2, 2), metalM); hd.position.set(leafLen - 10, Math.min(105, lh*0.5), z); hd.userData.oid = o.id; grp.add(hd); });
-          wallsG.add(grp);
+          tgt.add(grp);
           doorGroups.set(o.id, { grp, w, side, along:o.hinge ? -1 : 1 });
           setDoorAngle(o);
         }
@@ -583,8 +623,11 @@ function buildWalls(){
     });
     if (cur < g.len + ext.b) seg(g.len + ext.b - cur, cur, 0, w.h);
   });
-  const bb = wallsBBox(), cx = (bb.minx+bb.maxx)/2, cy = (bb.miny+bb.maxy)/2, W = bb.maxx-bb.minx, H = bb.maxy-bb.miny;
-  ceilMesh.scale.set(W, 1, H); ceilMesh.position.set(cx, (maxH || 250) + 3, cy);
+  fl._maxH = maxH || S.settings.defH; top = fl;
+  if (S.walls.length){ const b = wallsBBox(); ub = ub ? { minx:Math.min(ub.minx, b.minx), miny:Math.min(ub.miny, b.miny), maxx:Math.max(ub.maxx, b.maxx), maxy:Math.max(ub.maxy, b.maxy) } : b; }
+  }));
+  const bb = ub || wallsBBox(), cx = (bb.minx+bb.maxx)/2, cy = (bb.miny+bb.maxy)/2, W = bb.maxx-bb.minx, H = bb.maxy-bb.miny;
+  ceilMesh.scale.set(W, 1, H); ceilMesh.position.set(cx, (top ? top.elev + top._maxH : 250) + 3, cy);
   scene3d = { cx, cy, W, H };
   updateSun(); buildViews();
   scheduleFloor();
@@ -594,9 +637,8 @@ const doorDir = (w, side, along, open) => { const g = wg(w), th = clamp(open ?? 
 function setDoorAngle(o){ const e = doorGroups.get(o.id); if (!e) return; const d = doorDir(e.w, e.side, e.along, o.open); e.grp.rotation.y = -Math.atan2(d.y, d.x); }
 
 /* ---------- floor raster: rooms are found by flood fill between walls ---------- */
-let raster = null, floorTimer = 0, floorPlanCanvas = null, floorTex = null;
-const floorMat = new THREE.MeshStandardMaterial({ color:0xffffff, roughness:0.8 });
-function scheduleFloor(){ raster = null; clearTimeout(floorTimer); floorTimer = setTimeout(rebuildFloor, drag ? 150 : 0); }
+let rasters = {}, floorTimer = 0, floorPlanCanvases = {};
+function scheduleFloor(){ rasters = {}; clearTimeout(floorTimer); floorTimer = setTimeout(rebuildFloor, drag ? 150 : 0); }
 function wallOnlyBBox(){
   let minx=1e9,miny=1e9,maxx=-1e9,maxy=-1e9;
   S.walls.forEach(w => [w.a,w.b].forEach(p => { minx=Math.min(minx,p.x-w.t); maxx=Math.max(maxx,p.x+w.t); miny=Math.min(miny,p.y-w.t); maxy=Math.max(maxy,p.y+w.t); }));
@@ -604,7 +646,7 @@ function wallOnlyBBox(){
   return { minx:minx-40, miny:miny-40, maxx:maxx+40, maxy:maxy+40 };
 }
 function getRaster(){
-  if (raster) return raster;
+  if (rasters[S.curFloor]) return rasters[S.curFloor];
   const bb = wallOnlyBBox(); if (!bb) return null;
   const W = bb.maxx-bb.minx, H = bb.maxy-bb.miny, cell = Math.max(2, Math.ceil(Math.max(W, H)/1200));
   const nx = Math.ceil(W/cell), ny = Math.ceil(H/cell), blk = new Uint8Array(nx*ny);
@@ -618,7 +660,7 @@ function getRaster(){
       if (sA >= -e.a - cell*0.5 && sA <= g.len + e.b + cell*0.5 && Math.abs(k) <= t2) blk[j*nx+i] = 1;
     }
   });
-  return (raster = { ...bb, cell, nx, ny, blk });
+  return (rasters[S.curFloor] = { ...bb, cell, nx, ny, blk });
 }
 function regionAt(p){
   const r = getRaster(); if (!r) return null;
@@ -634,29 +676,70 @@ function regionAt(p){
   return { mask, n, edge, r };
 }
 const inMask = (reg, x, y) => { const r = reg.r, i = Math.floor((x - r.minx)/r.cell), j = Math.floor((y - r.miny)/r.cell); return i >= 0 && j >= 0 && i < r.nx && j < r.ny && reg.mask[j*r.nx+i] === 1; };
+// Footprint of a stair (or any furniture) as a polygon in plan coordinates
+function footprint(f){ const a = rad(f.rot), c = Math.cos(a), s2 = Math.sin(a); return [[-1,-1],[1,-1],[1,1],[-1,1]].map(([u, v]) => { const lx = u*f.w/2, lz = v*f.d/2; return { x:f.x + lx*c - lz*s2, y:f.y + lx*s2 + lz*c }; }); }
+function inFootprint(f, x, y, m = 0){ const a = rad(f.rot), dx = x - f.x, dy = y - f.y, lx = dx*Math.cos(a) + dy*Math.sin(a), lz = -dx*Math.sin(a) + dy*Math.cos(a); return Math.abs(lx) <= f.w/2 + m && Math.abs(lz) <= f.d/2 + m ? { lx, lz } : null; }
+const isStair = f => !!f.def?.stair;
+// Stairs that start on a lower floor and end at this floor (they need a hole in this floor)
+function stairsInto(fl){ return S.floors.filter(b => b.elev < fl.elev).flatMap(b => b.furniture.filter(f => isStair(f) && Math.abs(b.elev + (f.elev || 0) + f.h - fl.elev) < 60)); }
+function stairsUp(fl){ const above = floorsSorted().find(f => f.elev > fl.elev); return above ? fl.furniture.filter(f => isStair(f) && Math.abs(fl.elev + (f.elev || 0) + f.h - above.elev) < 60) : []; }
+function canvasTex(cv){ const t = new THREE.CanvasTexture(cv); t.encoding = THREE.sRGBEncoding; t.anisotropy = 4; return t; }
 function rebuildFloor(){
-  const r = getRaster();
-  if (!r){ floorPlanCanvas = null; reqPlan(); return; }
-  const base = new THREE.Color(S.settings.floor), b = [base.r*255, base.g*255, base.b*255];
-  const c3 = document.createElement('canvas'), cp = document.createElement('canvas'); c3.width = cp.width = r.nx; c3.height = cp.height = r.ny;
-  const x3 = c3.getContext('2d'), xp = cp.getContext('2d');
-  const i3 = x3.createImageData(r.nx, r.ny), ip = xp.createImageData(r.nx, r.ny), d3 = i3.data, dp = ip.data;
-  for (let k = 0; k < r.nx*r.ny; k++){ d3[k*4] = b[0]; d3[k*4+1] = b[1]; d3[k*4+2] = b[2]; d3[k*4+3] = 255; }
-  let painted = 0;
-  S.floorPaint.forEach(sd => {
-    const reg = regionAt(sd); if (!reg) return; painted++;
-    const c = new THREE.Color(sd.c), cc = [c.r*255, c.g*255, c.b*255];
-    for (let k = 0; k < reg.mask.length; k++) if (reg.mask[k]){ d3[k*4] = dp[k*4] = cc[0]; d3[k*4+1] = dp[k*4+1] = cc[1]; d3[k*4+2] = dp[k*4+2] = cc[2]; dp[k*4+3] = 255; }
-  });
-  x3.putImageData(i3, 0, 0); xp.putImageData(ip, 0, 0);
-  floorPlanCanvas = painted ? cp : null;
-  if (ok3d){
-    if (floorTex) floorTex.dispose();
-    floorTex = new THREE.CanvasTexture(c3); floorTex.encoding = THREE.sRGBEncoding; floorTex.anisotropy = 4;
-    floorMat.map = floorTex; floorMat.needsUpdate = true; floorMesh.material = floorMat;
-    floorMesh.scale.set(r.nx*r.cell, r.ny*r.cell, 1); floorMesh.position.set(r.minx + r.nx*r.cell/2, 0, r.miny + r.ny*r.cell/2);
-  }
-  reqPlan();
+  floorPlanCanvases = {};
+  if (ok3d){ floorsG.traverse(o => { if (o.isMesh){ o.geometry.dispose(); ['map', 'alphaMap'].forEach(k => o.material[k]?.dispose()); o.material.dispose(); } }); while (floorsG.children.length) floorsG.remove(floorsG.children[0]); }
+  const sorted = floorsSorted(), minE = sorted.length ? sorted[0].elev : 0;
+  sorted.forEach((fl, idx) => withFloor(fl, () => {
+    const r = getRaster(); if (!r) return;
+    const N = r.nx*r.ny, upper = fl.elev > minE + 1, above = sorted[idx + 1];
+    // cells outside the building: everything connected to the border
+    const out = new Uint8Array(N), st = [];
+    for (let i = 0; i < r.nx; i++) for (const j of [0, r.ny - 1]){ const c = j*r.nx + i; if (!r.blk[c] && !out[c]){ out[c] = 1; st.push(c); } }
+    for (let j = 0; j < r.ny; j++) for (const i of [0, r.nx - 1]){ const c = j*r.nx + i; if (!r.blk[c] && !out[c]){ out[c] = 1; st.push(c); } }
+    while (st.length){ const c = st.pop(), ci = c % r.nx, cj = (c - ci)/r.nx; for (const q of [ci > 0 ? c-1 : -1, ci < r.nx-1 ? c+1 : -1, cj > 0 ? c-r.nx : -1, cj < r.ny-1 ? c+r.nx : -1]) if (q >= 0 && !out[q] && !r.blk[q]){ out[q] = 1; st.push(q); } }
+    r.outMask = out;
+    const holeIn = stairsInto(fl), holeUp = stairsUp(fl);
+    fl._holes = holeIn;
+    const mark = (list) => { const m = new Uint8Array(N); list.forEach(f => { for (let j = 0; j < r.ny; j++) for (let i = 0; i < r.nx; i++){ if (inFootprint(f, r.minx + (i+.5)*r.cell, r.miny + (j+.5)*r.cell)) m[j*r.nx+i] = 1; } }); return m; };
+    const hIn = mark(holeIn), hUp = mark(holeUp);
+    const base = new THREE.Color(S.settings.floor), b = [base.r*255, base.g*255, base.b*255];
+    const mk = () => { const c = document.createElement('canvas'); c.width = r.nx; c.height = r.ny; const x = c.getContext('2d'); return { c, x, im:x.createImageData(r.nx, r.ny) }; };
+    const C3 = mk(), CP = mk(), CA = mk(), CC = mk();
+    const d3 = C3.im.data, dp = CP.im.data, da = CA.im.data, dc = CC.im.data;
+    for (let k = 0; k < N; k++){
+      d3[k*4] = b[0]; d3[k*4+1] = b[1]; d3[k*4+2] = b[2]; d3[k*4+3] = 255;
+      const fa = upper && (out[k] || hIn[k]) ? 0 : 255; da[k*4] = da[k*4+1] = da[k*4+2] = fa; da[k*4+3] = 255;
+      const ca = out[k] || hUp[k] ? 0 : 255; dc[k*4] = dc[k*4+1] = dc[k*4+2] = ca; dc[k*4+3] = 255;
+    }
+    let painted = 0;
+    S.floorPaint.forEach(sd => {
+      const reg = regionAt(sd); if (!reg) return; painted++;
+      const c = new THREE.Color(sd.c), cc = [c.r*255, c.g*255, c.b*255];
+      for (let k = 0; k < reg.mask.length; k++) if (reg.mask[k]){ d3[k*4] = dp[k*4] = cc[0]; d3[k*4+1] = dp[k*4+1] = cc[1]; d3[k*4+2] = dp[k*4+2] = cc[2]; dp[k*4+3] = 255; }
+    });
+    [C3, CP, CA, CC].forEach(o => o.x.putImageData(o.im, 0, 0));
+    if (painted) floorPlanCanvases[fl.id] = CP.c;
+    if (ok3d){
+      const W = r.nx*r.cell, H = r.ny*r.cell, cx = r.minx + W/2, cz = r.miny + H/2;
+      const floorM = new THREE.MeshStandardMaterial({ color:0xffffff, roughness:0.8, map:canvasTex(C3.c), alphaMap:upper ? new THREE.CanvasTexture(CA.c) : null, alphaTest:upper ? 0.5 : 0 });
+      const fm = new THREE.Mesh(new THREE.PlaneGeometry(W, H), floorM); fm.rotation.x = -Math.PI/2; fm.position.set(cx, fl.elev + (upper ? 0.3 : 0), cz);
+      fm.receiveShadow = true; fm.castShadow = upper; fm.userData = { fl:fl.id, isFloor:true }; floorsG.add(fm);
+      if (above){ // the ceiling of this floor, with holes for stairs going up
+        const ceilM = new THREE.MeshStandardMaterial({ color:new THREE.Color('#fbfaf7').convertSRGBToLinear(), roughness:0.95, alphaMap:new THREE.CanvasTexture(CC.c), alphaTest:0.5, side:THREE.BackSide });
+        const cm = new THREE.Mesh(new THREE.PlaneGeometry(W, H), ceilM); cm.rotation.x = -Math.PI/2; cm.position.set(cx, fl.elev + (fl._maxH || S.settings.defH), cz);
+        cm.castShadow = true; cm.receiveShadow = true; cm.userData = { fl:fl.id, ceil:true }; floorsG.add(cm);
+      }
+    }
+  }));
+  applyFloorVis(); reqPlan();
+}
+// In the 3D overview, floors above the one you are editing are hidden so you can look in from above
+function applyFloorVis(){
+  if (!ok3d || !S) return;
+  const cur = curFl(), limit = view === '3d' ? cur.elev + 1 : Infinity, fe = id => S.floors.find(f => f.id === id)?.elev ?? 0;
+  wallsG.children.forEach(g => { g.visible = fe(g.userData.fl) <= limit; });
+  floorsG.children.forEach(m => { const e = fe(m.userData.fl); m.visible = e <= limit && !(m.userData.ceil && view === '3d' && e >= cur.elev - 1); });
+  furnG.children.forEach(r => { r.visible = fe(r.userData.fl) <= limit; });
+  runHooks('floorVis', limit, fe);
 }
 
 function scaledDef(f){
@@ -720,7 +803,7 @@ function applyJoints(f, root){
     if (e.j.type === 'slide') e.g.position[e.j.axis] += v; else e.g.rotation[e.j.axis] = rad(v);
   }
 }
-function placeRoot(f, root){ root.position.set(f.x, f.elev || 0, f.y); root.rotation.set(0, -rad(f.rot), 0); }
+function placeRoot(f, root){ const fl = furnFloor(f); root.position.set(f.x, (f.elev || 0) + (fl?.elev || 0), f.y); root.rotation.set(0, -rad(f.rot), 0); root.userData.fl = fl?.id; }
 const _inv = new THREE.Matrix4(), _m = new THREE.Matrix4(), _v = new THREE.Vector3();
 function computeHulls(f, root){
   root.updateMatrixWorld(true); _inv.copy(root.matrixWorld).invert();
@@ -749,15 +832,15 @@ function rebuildFurniture(f){
   const old = furnObjs.get(f.id);
   if (old){ furnG.remove(old); old.traverse(o => { if (o.isMesh) o.geometry.dispose(); }); }
   const root = buildFurniture(f); applyJoints(f, root); applyLight(f, root); placeRoot(f, root);
-  furnG.add(root); furnObjs.set(f.id, root); computeHulls(f, root);
+  furnG.add(root); furnObjs.set(f.id, root); computeHulls(f, root); if (S.curFloor && view === '3d') applyFloorVis(); if (isStair(f)) scheduleFloor();
 }
-function removeFurnObj(id){ const o = furnObjs.get(id); if (o){ furnG.remove(o); o.traverse(m => { if (m.isMesh) m.geometry.dispose(); }); furnObjs.delete(id); } }
-function updateFurnPose(f){ const r = furnObjs.get(f.id); if (r){ placeRoot(f, r); } }
+function removeFurnObj(id){ if (S?.floors && allFurniture().some(f => f.id === id && isStair(f))) scheduleFloor(); const o = furnObjs.get(id); if (o){ furnG.remove(o); o.traverse(m => { if (m.isMesh) m.geometry.dispose(); }); furnObjs.delete(id); } }
+function updateFurnPose(f){ const r = furnObjs.get(f.id); if (r){ placeRoot(f, r); } if (isStair(f)) scheduleFloor(); }
 function updateFurnJoints(f){ const r = furnObjs.get(f.id); if (r){ applyJoints(f, r); computeHulls(f, r); } }
 function rebuildAll(){
   if (ok3d){ for (const id of [...furnObjs.keys()]) removeFurnObj(id); buildWalls(); }
-  S.furniture.forEach(rebuildFurniture);
-  reqPlan();
+  allFurniture().forEach(rebuildFurniture);
+  applyFloorVis(); reqPlan();
 }
 
 /* ============================== view state & UI refs ============================== */
@@ -804,7 +887,8 @@ function drawPlan(){
   const ul = S.underlay, img = getUlImg();
   if (ul && img){ ctx.globalAlpha = ul.opacity ?? 0.5; ctx.drawImage(img, sx(ul.x), sy(ul.y), img.naturalWidth*ul.cmPerPx*z, img.naturalHeight*ul.cmPerPx*z); ctx.globalAlpha = 1; }
   // painted floors
-  if (floorPlanCanvas && raster){ ctx.globalAlpha = 0.5; ctx.imageSmoothingEnabled = false; ctx.drawImage(floorPlanCanvas, sx(raster.minx), sy(raster.miny), raster.nx*raster.cell*z, raster.ny*raster.cell*z); ctx.imageSmoothingEnabled = true; ctx.globalAlpha = 1; }
+  { const fpc = floorPlanCanvases[S.curFloor], fr = fpc && getRaster(); if (fpc && fr){ ctx.globalAlpha = 0.5; ctx.imageSmoothingEnabled = false; ctx.drawImage(fpc, sx(fr.minx), sy(fr.miny), fr.nx*fr.cell*z, fr.ny*fr.cell*z); ctx.imageSmoothingEnabled = true; ctx.globalAlpha = 1; } }
+  drawGhostFloor(ctx, col);
   // furniture
   S.furniture.forEach(f => {
     if (!f._hulls) return;
@@ -817,6 +901,9 @@ function drawPlan(){
       ctx.strokeStyle = shade(h.col, 0.62); ctx.stroke();
     });
     const isSel = sel?.kind === 'furn' && sel.id === f.id, b = f._bb;
+    if (isStair(f)){ // arrow from the bottom step (front) to the top
+      const L = f.d/2 - 6/z, hw = 6/z; ctx.strokeStyle = col.ink; ctx.fillStyle = col.ink; ctx.lineWidth = 1.5/z;
+      ctx.beginPath(); ctx.moveTo(0, L); ctx.lineTo(0, -L + 8/z); ctx.stroke(); ctx.beginPath(); ctx.moveTo(0, -L); ctx.lineTo(-hw, -L + 10/z); ctx.lineTo(hw, -L + 10/z); ctx.closePath(); ctx.fill(); }
     if (f.on !== false && f._lights?.length){
       f._lights.forEach(([lx, lz, bi]) => { const rr = 40 + 50*bi*(f.lightLevel ?? 1); const gr = ctx.createRadialGradient(lx, lz, 0, lx, lz, rr);
         gr.addColorStop(0, 'rgba(255,205,110,0.55)'); gr.addColorStop(1, 'rgba(255,205,110,0)'); ctx.fillStyle = gr; ctx.beginPath(); ctx.arc(lx, lz, rr, 0, 7); ctx.fill(); });
@@ -913,6 +1000,67 @@ function drawPlan(){
   $('#hud').textContent = (cursorW ? `x ${fmt(cursorW.x)}  y ${fmt(cursorW.y)}   ` : '') + `rutnät ${minor} cm`;
 }
 function rotHandle(f){ const b = f._bb || { maxz:f.d/2 }; const L = b.maxz*pv.z + 26, a = rad(f.rot); return { x: sx(f.x) - Math.sin(a)*L, y: sy(f.y) + Math.cos(a)*L }; }
+
+/* ============================== floors: plan ghost, switching, adding ============================== */
+function drawGhostFloor(ctx, col){
+  const cur = curFl(), below = floorsSorted().filter(f => f.elev < cur.elev).pop();
+  if (below){
+    ctx.save(); ctx.globalAlpha = 0.18; ctx.fillStyle = col.wall;
+    below.walls.forEach(w => { const g = wg(w), t2 = w.t/2; ctx.beginPath();
+      [[w.a, t2], [w.b, t2], [w.b, -t2], [w.a, -t2]].forEach(([q, k], i) => { const X = sx(q.x + g.nx*k), Y = sy(q.y + g.ny*k); i ? ctx.lineTo(X, Y) : ctx.moveTo(X, Y); }); ctx.closePath(); ctx.fill(); });
+    ctx.restore();
+  }
+  (cur._holes || []).forEach(f => { const pts = footprint(f); ctx.save(); ctx.setLineDash([6, 4]); ctx.strokeStyle = col.ink; ctx.lineWidth = 1.2; ctx.beginPath();
+    pts.forEach((q, i) => i ? ctx.lineTo(sx(q.x), sy(q.y)) : ctx.moveTo(sx(q.x), sy(q.y))); ctx.closePath(); ctx.stroke();
+    ctx.font = `500 11px ${css('--f-mono')}`; ctx.fillStyle = col.muted; ctx.textAlign = 'center'; ctx.fillText('trapphål', sx(f.x), sy(f.y)); ctx.restore(); });
+}
+function renderFloorUI(){
+  if (!S) return;
+  const cur = curFl(), list = floorsSorted().reverse();
+  $('#floorBar').innerHTML = list.map(f => `<button data-fl="${f.id}" aria-pressed="${f.id === cur.id}" title="${esc(f.name)} · golv ${fmt(f.elev)} cm">${esc(f.name)}</button>`).join('') + `<button data-fladd title="Lägg till en våning ovanför">+</button>`;
+  $('#flName').value = cur.name; $('#flElev').value = cur.elev; $('#floorPill').textContent = cur.name;
+  $('#flDel').disabled = S.floors.length < 2;
+}
+function switchFloor(id, quiet){
+  if (id === S.curFloor) return;
+  S.curFloor = id; if (!quiet) sel = null; wallDraw.pts = []; roomDraw = null;
+  renderFloorUI(); syncSettingsUI(); renderTools(); if (!quiet) renderInspector();
+  if (view === '3d') orbit.ty = curFl().elev;
+  applyFloorVis(); runHooks('floor'); reqPlan(); scheduleSave();
+}
+function exteriorWalls(){
+  return S.walls.filter(w => { const g = wg(w), m = { x:(w.a.x + w.b.x)/2, y:(w.a.y + w.b.y)/2 }, r = getRaster(), off = w.t/2 + (r ? r.cell*3 : 6);
+    return [1, -1].some(sd => { const reg = regionAt({ x:m.x + g.nx*sd*off, y:m.y + g.ny*sd*off }); return reg && reg.edge; }); });
+}
+function addFloor(dir){
+  pushUndo();
+  const cur = curFl(), sorted = floorsSorted(), gap = (cur._maxH || S.settings.defH) + 30;
+  const copy = $('#flCopy').checked ? exteriorWalls().map(w => ({ id:uid(), a:{ ...w.a }, b:{ ...w.b }, t:w.t, h:S.settings.defH })) : [];
+  let elev;
+  if (dir > 0){ elev = cur.elev + gap; sorted.filter(f => f.elev > cur.elev).forEach(f => { f.elev += gap; }); }
+  else { elev = cur.elev - gap; sorted.filter(f => f.elev < cur.elev).forEach(f => { f.elev -= gap; }); }
+  const lowest = dir < 0 && !sorted.some(f => f.elev < elev);
+  const fl = { id:'f' + uid(), name:lowest && elev < 0 ? 'Källare' : 'Plan ' + (S.floors.length + 1), elev, walls:copy, openings:[], furniture:[], floorPaint:[], underlay:null };
+  FLOOR_KEYS.forEach(k => { if (!(k in fl)) fl[k] = k === 'underlay' ? null : []; });
+  S.floors.push(fl); switchFloor(fl.id);
+  rebuildAll(); changed();
+  toast(`${fl.name} är tillagd${copy.length ? ` med ${copy.length} ytterväggar kopierade` : ''}. Lägg till en trappa från biblioteket för att gå mellan våningarna.`);
+}
+function deleteFloor(){
+  if (S.floors.length < 2) return;
+  pushUndo();
+  const cur = curFl();
+  cur.furniture.forEach(f => removeFurnObj(f.id));
+  S.floors = S.floors.filter(f => f !== cur);
+  S.curFloor = floorsSorted()[0].id; sel = null;
+  rebuildAll(); renderFloorUI(); syncSettingsUI(); renderTools(); renderInspector(); runHooks('floor'); changed();
+}
+$('#floorBar').addEventListener('click', e => { const b = e.target.closest('[data-fl]'); if (b) switchFloor(b.dataset.fl); if (e.target.closest('[data-fladd]')) addFloor(1); });
+$('#flUp').addEventListener('click', () => addFloor(1));
+$('#flDown').addEventListener('click', () => addFloor(-1));
+$('#flDel').addEventListener('click', e => confirmBtn(e.currentTarget, 'Ta bort allt på våningen?', deleteFloor));
+$('#flName').addEventListener('change', e => { pushUndo(); curFl().name = e.target.value.slice(0, 40) || curFl().name; renderFloorUI(); changed(); });
+$('#flElev').addEventListener('change', e => { pushUndo(); curFl().elev = Math.round(num(e.target.value, curFl().elev)); rebuildAll(); renderFloorUI(); changed(); });
 
 /* ============================== snapping ============================== */
 function snapPt(p, { exclude = [], from = null, free = false } = {}){
@@ -1156,6 +1304,9 @@ function renderInspector0(){
       <div class="row"><button class="btn small" data-act="rot--90">↺ 90°</button><button class="btn small" data-act="rot--15">↺ 15°</button><button class="btn small" data-act="rot-15">↻ 15°</button><button class="btn small" data-act="rot-90">↻ 90°</button></div>
       <div class="grid2">${nf('Höjd över golv','elev',f.elev||0,'min="0"')}<div></div></div>
     </section>
+    ${isStair(f) ? `<section class="sec"><h3>Trappa</h3>
+      <div class="hint">Nedersta steget är där pilen börjar i planen. Höjden ska vara samma som avståndet till våningen ovanför, så kan du gå upp för trappan. Våningen ovanför får automatiskt ett hål i golvet.</div>
+      <div class="row"><button class="btn small" data-act="stair-fit" ${floorsSorted().some(fl => fl.elev > curFl().elev) ? '' : 'disabled'}>Anpassa höjden till våningen ovanför</button></div></section>` : ''}
     ${isLampF(f) ? `<section class="sec"><h3>Belysning <span class="pill ${f.on !== false ? 'on' : ''}">${f.on !== false ? 'tänd' : 'släckt'}</span></h3>
       <div class="row"><button class="btn small" data-act="light-toggle">${f.on !== false ? 'Släck' : 'Tänd'}</button></div>
       <label class="f">Ljusstyrka<input type="range" min="0.1" max="2.5" step="0.05" data-k="lightLevel" value="${f.lightLevel ?? 1}"></label>
@@ -1289,6 +1440,7 @@ function onAct(a){
     else if (a === 'savelib'){ const d = clone(f.def); Object.assign(d, { name:f.name, color:f.color }); const sc = scaleDefTo(d, f.w, f.d, f.h); S.library.unshift(sc); changed(); renderLibrary(); toast(`“${f.name}” sparad i biblioteket.`); }
     else if (a === 'jt-all') toggleJoints(f);
     else if (a === 'light-toggle') toggleLight(f);
+    else if (a === 'stair-fit'){ const up = floorsSorted().find(fl => fl.elev > curFl().elev); if (up){ pushUndo(); f.h = up.elev - curFl().elev - (f.elev || 0); rebuildFurniture(f); scheduleFloor(); changed(); renderInspector(); } }
     else if (a.startsWith('jt-')) { const id = a.slice(3); animateJoint(f, id, (f.j[id] || 0) > 0.5 ? 0 : 1); }
     else if (a === 'ai-edit') aiEdit(f);
     return;
@@ -1309,7 +1461,7 @@ function onAct(a){
     buildWalls(); changed();
   }
 }
-function scaleDefTo(def, w, d, h){ const f = { def, w, d, h }; const sd = scaledDef(f); return { name:def.name, w, d, h, color:def.color, parts:sd.parts, joints:sd.joints, ...(sd.lights.length ? { lights:sd.lights } : {}), ...(def.elev ? { elev:def.elev } : {}), ...(def.src ? { src:def.src } : {}) }; }
+function scaleDefTo(def, w, d, h){ const f = { def, w, d, h }; const sd = scaledDef(f); return { name:def.name, w, d, h, color:def.color, parts:sd.parts, joints:sd.joints, ...(sd.lights.length ? { lights:sd.lights } : {}), ...(def.elev ? { elev:def.elev } : {}), ...(def.src ? { src:def.src } : {}), ...(def.stair ? { stair:def.stair } : {}) }; }
 function setWallLength(w, L, mode){
   L = Math.max(1, L); const g = wg(w), delta = L - g.len; if (Math.abs(delta) < 0.01) return;
   const dx = g.ux*delta, dy = g.uy*delta, pb = w.b.x*g.ux + w.b.y*g.uy;
@@ -1521,7 +1673,7 @@ function toggleRoomLights(){
   reqPlan(); scheduleSave(); renderInspector();
   toast(`${anyOn ? 'Släckte' : 'Tände'} ${lamps.length} ${lamps.length === 1 ? 'lampa' : 'lampor'} i rummet.`);
 }
-function setAllLamps(on){ let n = 0; S.furniture.forEach(f => { if (isLampF(f)){ f.on = on; applyLight(f, furnObjs.get(f.id)); n++; } }); reqPlan(); scheduleSave(); renderInspector(); return n; }
+function setAllLamps(on){ let n = 0; allFurniture().forEach(f => { if (isLampF(f)){ f.on = on; applyLight(f, furnObjs.get(f.id)); n++; } }); reqPlan(); scheduleSave(); renderInspector(); return n; }
 $('#bLampsOn').addEventListener('click', () => { if (!setAllLamps(true)) toast('Det finns inga lampor ännu. Lägg till en från biblioteket eller skapa en med Claude.'); });
 $('#bLampsOff').addEventListener('click', () => setAllLamps(false));
 $('#bRoomLamps').addEventListener('click', toggleRoomLights);
@@ -1787,6 +1939,7 @@ function spawnPoint(){
 function placeNew(def){
   pushUndo();
   const p = spawnPoint(), f = makeInstance(def, Math.round(p.x), Math.round(p.y), 0);
+  if (def.stair){ const up = floorsSorted().find(fl => fl.elev > curFl().elev); if (up) f.h = up.elev - curFl().elev; }
   S.furniture.push(f); rebuildFurniture(f); changed(); select({ kind:'furn', id:f.id });
   toast(`“${f.name}” tillagd. Dra den på plats.`);
 }
@@ -2009,7 +2162,9 @@ function setView(v){
   $('#dpad').classList.toggle('show', v === 'walk');
   if (v !== 'plan'){ resize3D(); setSky(); }
   if (ok3d){ applyCeiling(); cam.fov = v === 'walk' ? 72 : 55; cam.updateProjectionMatrix(); }
-  if (v === '3d'){ const bb = wallsBBox(); orbit.tx = (bb.minx+bb.maxx)/2; orbit.tz = (bb.miny+bb.maxy)/2; orbit.dist = Math.max(bb.maxx-bb.minx, bb.maxy-bb.miny)*1.25 + 200; }
+  if (v === '3d'){ const bb = wallsBBox(); orbit.tx = (bb.minx+bb.maxx)/2; orbit.tz = (bb.miny+bb.maxy)/2; orbit.ty = curFl().elev; orbit.dist = Math.max(bb.maxx-bb.minx, bb.maxy-bb.miny)*1.25 + 200; }
+  if (v === 'walk'){ walk.foot = curFl().elev; walk.eye = null; }
+  applyFloorVis();
   walkHelp(); showTip(); reqPlan();
 }
 function walkHelp(){ $('#walkHelpText').innerHTML = document.pointerLockElement === c3 ? '<kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> gå · mus tittar · <kbd>Shift</kbd> fortare · <kbd>E</kbd> använd · <kbd>C</kbd> sätt dig/res dig · <kbd>L</kbd> lampor i rummet · <kbd>Esc</kbd> släpp musen' : 'Klicka i bilden för att styra med musen · eller dra för att titta · <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> gå'; }
@@ -2029,13 +2184,13 @@ function pickFurn(clientX, clientY){
 function pick(clientX, clientY){
   const r = c3.getBoundingClientRect(); ndc.set(((clientX - r.left)/r.width)*2 - 1, -((clientY - r.top)/r.height)*2 + 1);
   ray.setFromCamera(ndc, cam);
-  const hits = ray.intersectObjects([furnG, wallsG, floorMesh], true).filter(h => !(h.object.material?.opacity < 0.5));
+  const hits = ray.intersectObjects([furnG, wallsG, floorsG], true).filter(h => h.object.visible !== false && (!h.object.parent || h.object.parent.visible !== false) && !h.object.userData.ceil).filter(h => !(h.object.material?.opacity < 0.5));
   const h = hits[0]; if (!h) return null;
   const u = h.object.userData, res = { d:h.distance, point:h.point, obj:h.object };
   if (u.fid) res.f = furnById(u.fid);
   if (u.oid) res.door = openById(u.oid);
   if (u.wid){ res.wall = wallById(u.wid); res.normal = h.face ? h.face.normal.clone().transformDirection(h.object.matrixWorld) : null; }
-  if (h.object === floorMesh) res.floor = true;
+  if (h.object.userData.isFloor) res.floor = true;
   return res;
 }
 function paint3D(clientX, clientY){
@@ -2044,7 +2199,7 @@ function paint3D(clientX, clientY){
     if (!h?.wall || !h.normal || Math.abs(h.normal.y) > 0.5){ toast('Sikta på en väggyta.'); return; }
     paintWallAt({ x:h.point.x + h.normal.x*1, y:h.point.z + h.normal.z*1 }, 8);
   } else if (tool === 'paintfloor'){
-    if (ray.ray.intersectPlane(floorPlane, hitV)) paintFloorAt({ x:hitV.x, y:hitV.z });
+    floorPlane.constant = -curFl().elev; if (ray.ray.intersectPlane(floorPlane, hitV)) paintFloorAt({ x:hitV.x, y:hitV.z });
   }
 }
 let od = null; const keys = new Set();
@@ -2060,7 +2215,7 @@ c3.addEventListener('pointerdown', e => {
   const hit = (e.button === 0 && !e.shiftKey) ? pickFurn(e.clientX, e.clientY) : null;
   if (hit?.f){
     select({ kind:'furn', id:hit.f.id });
-    ray.ray.intersectPlane(floorPlane, hitV);
+    floorPlane.constant = -(furnFloor(hit.f)?.elev || 0); ray.ray.intersectPlane(floorPlane, hitV);
     od = { kind:'move', f:hit.f, ox:hit.f.x - hitV.x, oy:hit.f.y - hitV.z, moved:false };
   } else od = { kind:(e.button === 2 || e.shiftKey) ? 'pan' : 'orbit', x:e.clientX, y:e.clientY, moved:false };
 });
@@ -2093,7 +2248,7 @@ $('#dpad').addEventListener('click', e => { if (e.target.closest('[data-sit]')) 
 $('#dpad').addEventListener('pointerdown', e => { const b = e.target.closest('[data-k]'); if (b){ keys.add(b.dataset.k); b.setPointerCapture(e.pointerId); } });
 ['pointerup','pointercancel'].forEach(t => $('#dpad').addEventListener(t, e => { const b = e.target.closest('[data-k]'); if (b) keys.delete(b.dataset.k); }));
 
-const walk = { pitch:-0.05, hover:null, saveT:0, seated:null, eye:null };
+const walk = { pitch:-0.05, hover:null, saveT:0, seated:null, eye:null, foot:null };
 const seatRay = new THREE.Raycaster(), DOWN = new THREE.Vector3(0, -1, 0), _o = new THREE.Vector3();
 function surfaceAt(root, x, z){ seatRay.set(_o.set(x, 500, z), DOWN); const hs = seatRay.intersectObject(root, true); return hs.length ? hs[0].point.y : null; }
 // The seat is the lowest sittable surface (25-110 cm) near where you aim, so aiming at a backrest or armrest still seats you on the cushion.
@@ -2137,6 +2292,23 @@ function collide(p){
     if (d < 1e-6){ p.x += g.nx*min; p.y += g.ny*min; } else { p.x = cx + dx/d*min; p.y = cy + dy/d*min; }
   }
 }
+function supportAt(x, y, foot){
+  let best = -Infinity, lowest = Infinity;
+  for (const fl of S.floors){
+    lowest = Math.min(lowest, fl.elev);
+    let ok = true;
+    if (fl !== floorsSorted()[0]){
+      const r = withFloor(fl, getRaster);
+      if (!r) ok = false;
+      else { const i = Math.floor((x - r.minx)/r.cell), j = Math.floor((y - r.miny)/r.cell); ok = i >= 0 && j >= 0 && i < r.nx && j < r.ny && !(r.outMask && r.outMask[j*r.nx+i]); }
+      if (ok && (fl._holes || []).some(f => inFootprint(f, x, y))) ok = false;
+    }
+    if (ok && fl.elev <= foot + 55) best = Math.max(best, fl.elev);
+    for (const f of fl.furniture){ if (!isStair(f)) continue; const l = inFootprint(f, x, y); if (!l) continue;
+      const h = fl.elev + (f.elev || 0) + clamp((f.d/2 - l.lz)/f.d, 0, 1)*f.h; if (h <= foot + 55) best = Math.max(best, h); }
+  }
+  return best > -Infinity ? best : (lowest === Infinity ? 0 : lowest);
+}
 function stepWalk(dt){
   const v = S.viewer, a = rad(v.a), sp = (keys.has('ShiftLeft') || keys.has('ShiftRight') ? 300 : 140) * dt;
   let fx = 0, fy = 0;
@@ -2149,7 +2321,11 @@ function stepWalk(dt){
     collide(p); v.x = p.x; v.y = p.y; reqPlan();
     walk.saveT += dt; if (walk.saveT > 1){ walk.saveT = 0; scheduleSave(); }
   }
-  const tEye = walk.seated ? walk.seated.y + eyeSit() : eyeStand();
+  // what you stand on: the floor (unless over a stair hole or outside the building) or a stair
+  const tFoot = supportAt(v.x, v.y, walk.foot ?? curFl().elev);
+  walk.foot = walk.foot == null ? tFoot : walk.foot + (tFoot - walk.foot)*Math.min(1, dt*12);
+  { const on = floorsSorted().filter(f => f.elev <= walk.foot + 40).pop(); if (on && on.id !== S.curFloor && !walk.seated) switchFloor(on.id, true); }
+  const tEye = walk.seated ? walk.seated.y + eyeSit() : walk.foot + eyeStand();
   if (walk.eye === null) walk.eye = tEye; walk.eye += (tEye - walk.eye)*Math.min(1, dt*5);
   const eye = walk.eye;
   cam.position.set(v.x, eye, v.y);
@@ -2189,6 +2365,7 @@ document.addEventListener('keydown', e => {
   if (e.code === 'Space'){ spaceDown = true; if (view === 'plan') e.preventDefault(); return; }
   if (mod) return;
   if (e.code === 'KeyL' && !e.shiftKey && !e.altKey){ toggleRoomLights(); return; }
+  if (e.key === 'PageUp' || e.key === 'PageDown'){ e.preventDefault(); const l = floorsSorted(), i = l.findIndex(f => f.id === S.curFloor), n = l[i + (e.key === 'PageUp' ? 1 : -1)]; if (n) switchFloor(n.id); return; }
   if (e.code === 'KeyD' && !e.shiftKey && !e.altKey && sel?.kind === 'furn' && !(tool === 'wall' && wallDraw.pts.length)){ e.preventDefault(); const f = furnById(sel.id); if (f) duplicate(f); return; }
   if (firstHook('key', e)) return;
   if (tool === 'wall' && wallDraw.pts.length){
@@ -2310,7 +2487,7 @@ async function unpack(d){
   if (d.enc === 'gz64'){ const bin = atob(d.z), u = Uint8Array.from(bin, c => c.charCodeAt(0)); return JSON.parse(await new Response(new Blob([u]).stream().pipeThrough(new DecompressionStream('gzip'))).text()); }
   return JSON.parse(d.z);
 }
-function shareSnapshot(){ const o = JSON.parse(serialize(false)); delete o.underlay; delete o.library; delete o.shareId; delete o.meta; o.views = []; return o; }
+function shareSnapshot(){ const o = JSON.parse(serialize(false)); delete o.underlay; (o.floors || []).forEach(f => { f.underlay = null; }); delete o.library; delete o.shareId; delete o.meta; o.views = []; return o; }
 const shareLink = id => APP_URL + '#hem-' + id;
 function openShare(){
   const m = modal(`<b>Dela din möblerade lägenhet</b>
@@ -2385,7 +2562,7 @@ window.addEventListener('hashchange', checkHash);
 /*@SLOT:JS*/
 /* ============================== boot ============================== */
 function afterLoad(fit){
-  rebuildAll(); syncSettingsUI(); renderTools(); renderLibrary(); renderInspector(); renderSwatches(); syncSunUI(); updUndo(); renderViews(); runHooks('afterLoad'); applyCollapse($('#left')); projMeta();
+  rebuildAll(); syncSettingsUI(); renderTools(); renderLibrary(); renderInspector(); renderSwatches(); syncSunUI(); updUndo(); renderViews(); renderFloorUI(); runHooks('afterLoad'); applyCollapse($('#left')); projMeta();
   if (fit) fitPlan();
 }
 let last = performance.now();

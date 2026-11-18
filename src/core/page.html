@@ -40,6 +40,16 @@
         </div>
         <div class="hint" id="toolHint"></div>
       </section>
+      <section class="sec">
+        <h3>Våningar <span class="pill" id="floorPill">Plan 1</span></h3>
+        <div class="grid2">
+          <label class="f">Namn<input type="text" id="flName"></label>
+          <label class="f">Golvnivå (cm)<input type="number" id="flElev" step="1"></label>
+        </div>
+        <div class="row"><button class="btn small" id="flUp">+ Våning ovanför</button><button class="btn small" id="flDown">+ Våning under</button><button class="btn small danger" id="flDel">Ta bort våningen</button></div>
+        <label class="f inline"><input type="checkbox" id="flCopy" checked> Kopiera ytterväggarna till en ny våning</label>
+        <div class="hint">Byt våning med knapparna till vänster i bilden eller med PageUp/PageDown. Varje våning har egna väggar, möbler och planritning. En trappa från biblioteket kopplar ihop våningarna.</div>
+      </section>
 <!--@SLOT:LEFT-->
       <section class="sec">
         <h3>Färg på väggar och golv</h3>
@@ -168,6 +178,7 @@
         <span class="si" id="sunInfo"></span>
         <input type="date" id="sunDate" aria-label="Datum">
       </div>
+      <div class="floorbar" id="floorBar"></div>
 <!--@SLOT:STAGE-->
       <div class="dpad" id="dpad">
         <button class="act" data-sit>Sitt</button><button data-k="KeyW">▲</button><button class="act" data-use>E</button>

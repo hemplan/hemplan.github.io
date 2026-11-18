@@ -32,10 +32,11 @@ const RESOLUTIONS = [['2 MP', 1920, 1080], ['4 MP', 2560, 1440], ['5 MP', 2592, 
 const DORI = [['D', 'Detektera', 25, '#7cb342'], ['O', 'Observera', 62.5, '#f9a825'], ['R', 'Känna igen', 125, '#ef6c00'], ['I', 'Identifiera', 250, '#c62828']];
 let devType = 'camera';
 
+FLOOR_KEYS.push('devices'); // devices belong to a floor, like walls and furniture
 HOOKS.normalize.push(o => {
   o.devices = Array.isArray(o.devices) ? o.devices : [];
   // cameras placed before the ceiling fix ended up in the ceiling; move them just below it
-  o.devices.forEach(d => { if (d.type === 'camera'){ const c = ceilingAt(d.x, d.y, o.walls || []); if (d.z > c - 8) d.z = r1(c - 15); } });
+  (o.floors || [o]).forEach(f => (f.devices || []).forEach(d => { if (d.type === 'camera'){ const c = ceilingAt(d.x, d.y, f.walls || []); if (d.z > c - 8) d.z = r1(c - 15); } }));
   o.work = Object.assign({ target:100, show:true }, o.work || {});
 });
 const devById = id => S.devices.find(d => d.id === id);
@@ -267,11 +268,12 @@ $('#devList').addEventListener('click', e => { const b = e.target.closest('[data
 $('#devTarget').addEventListener('change', e => { S.work.target = clamp(num(e.target.value, 100), 0, 300); devChanged(); renderInspector(); });
 $('#devShow').addEventListener('change', e => { S.work.show = e.target.checked; devChanged(); });
 $('#bDevCsv').addEventListener('click', () => {
-  if (!S.devices.length){ toast('Det finns ingen utrustning att exportera ännu.'); return; }
+  if (!S.floors.some(f => f.devices.length)){ toast('Det finns ingen utrustning att exportera ännu.'); return; }
   const n = v => String(v ?? '').replace(/\./g, ',');
-  const rows = [['Nr', 'Typ', 'Namn', 'X (m)', 'Y (m)', 'Höjd (m)', 'Riktning (°)', 'Lutning (°)', 'Brännvidd (mm)', 'Synfält H (°)', 'Upplösning', 'Identifiera (m)', 'Räckvidd (m)', 'Anteckning']];
-  S.devices.forEach((d, i) => { const cam = DT(d).kind === 'camera';
-    rows.push([i + 1, DT(d).label, d.name, n(r1(d.x/100)), n(r1(d.y/100)), n(r1(d.z/100)), DT(d).kind === 'camera' || DT(d).kind === 'wedge' ? Math.round(d.a) : '', cam ? d.tilt : '', cam && d.fovMode !== 'fov' ? n(d.focal) : '', cam ? n(r1(camFov(d).h)) : '', cam ? `${d.resW}x${d.resH}` : '', cam ? n(r1(doriDist(d, 250)/100)) : '', d.range ? n(d.range) : '', d.note || '']); });
+  const rows = [['Nr', 'Våning', 'Typ', 'Namn', 'X (m)', 'Y (m)', 'Höjd (m)', 'Riktning (°)', 'Lutning (°)', 'Brännvidd (mm)', 'Synfält H (°)', 'Upplösning', 'Identifiera (m)', 'Räckvidd (m)', 'Anteckning']];
+  let nr = 0;
+  floorsSorted().forEach(fl => fl.devices.forEach(d => { const cam = DT(d).kind === 'camera';
+    rows.push([++nr, fl.name, DT(d).label, d.name, n(r1(d.x/100)), n(r1(d.y/100)), n(r1(d.z/100)), DT(d).kind === 'camera' || DT(d).kind === 'wedge' ? Math.round(d.a) : '', cam ? d.tilt : '', cam && d.fovMode !== 'fov' ? n(d.focal) : '', cam ? n(r1(camFov(d).h)) : '', cam ? `${d.resW}x${d.resH}` : '', cam ? n(r1(doriDist(d, 250)/100)) : '', d.range ? n(d.range) : '', d.note || '']); }));
   const csv = '﻿' + rows.map(r => r.map(c => /[;"\n]/.test(String(c)) ? '"' + String(c).replace(/"/g, '""') + '"' : c).join(';')).join('\r\n');
   saveFile((S.name || 'projekt').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/gi, '-').toLowerCase() + '-utrustning.csv', csv, 'Utrustningslistan är exporterad.');
 });
@@ -288,8 +290,9 @@ function camDir(d){ const a = rad(d.a), t = rad(d.tilt || 0); return new THREE.V
 function buildDevices3D(){
   if (!ensureGroups()) return;
   [devG, covG].forEach(g => { g.traverse(o => { if (o.geometry) o.geometry.dispose(); if (o.material && o.material.userData?.own) o.material.dispose(); }); while (g.children.length) g.remove(g.children[0]); });
+  S.floors.forEach(fl => withFloor(fl, () => {
   S.devices.forEach(d => {
-    const t = DT(d), g = new THREE.Group(); g.position.set(d.x, d.z, d.y); g.userData.devId = d.id;
+    const t = DT(d), g = new THREE.Group(); g.position.set(d.x, d.z + fl.elev, d.y); g.userData.devId = d.id; g.userData.fl = fl.id;
     const body = mat(t.color), dark = mat('#222222');
     if (t.kind === 'camera'){
       const housing = new THREE.Mesh(new THREE.BoxGeometry(16, 8, 8), mat('#f2f2f0')); housing.position.x = 4;
@@ -331,10 +334,12 @@ function buildDevices3D(){
       for (let i = cv.rays.length - 1; i >= 0; i--){ const r = cv.rays[i], L = Math.min(r.hit, cv.near); sh.lineTo(d.x + r.dx*L, d.y + r.dy*L); }
       const m = new THREE.MeshBasicMaterial({ color:new THREE.Color(z.col).convertSRGBToLinear(), transparent:true, opacity:0.16, depthWrite:false, side:THREE.DoubleSide }); m.userData.own = true;
       const mesh = new THREE.Mesh(new THREE.ShapeGeometry(sh), m);
-      mesh.rotation.x = Math.PI/2; mesh.position.y = 0.6 + zi*0.15; mesh.renderOrder = 1; covG.add(mesh);
+      mesh.rotation.x = Math.PI/2; mesh.position.y = fl.elev + 0.6 + zi*0.15; mesh.renderOrder = 1; mesh.userData.fl = fl.id; covG.add(mesh);
     });
   });
+  }));
   covG.visible = view !== 'walk';
+  applyFloorVis();
 }
 let devTimer = 0;
 function devChanged(quick){
@@ -344,6 +349,8 @@ function devChanged(quick){
 }
 HOOKS.build.push(() => buildDevices3D());
 HOOKS.view.push(v => { if (covG) covG.visible = v !== 'walk'; });
+HOOKS.floorVis.push((limit, fe) => { [devG, covG].forEach(g => g?.children.forEach(c => { c.visible = fe(c.userData.fl) <= limit; })); });
+HOOKS.floor.push(() => { renderDevPanel(); buildDevices3D(); });
 
 let pipCam = null, pipBig = false, pipCtx = null;
 const _sz = new THREE.Vector2();
@@ -363,7 +370,7 @@ HOOKS.preframe.push(() => {
   if (cv.width !== Math.round(w*pr) || cv.height !== Math.round(h*pr)){ cv.width = Math.round(w*pr); cv.height = Math.round(h*pr); }
   const f = camFov(d), dir = camDir(d);
   pipCam.fov = f.v; pipCam.aspect = w/h; pipCam.updateProjectionMatrix();
-  pipCam.position.set(d.x, d.z, d.y); pipCam.lookAt(d.x + dir.x*100, d.z + dir.y*100, d.y + dir.z*100);
+  const e0 = curFl().elev; pipCam.position.set(d.x, d.z + e0, d.y); pipCam.lookAt(d.x + dir.x*100, d.z + e0 + dir.y*100, d.y + dir.z*100);
   const own = devG?.children.find(g => g.userData.devId === d.id), covVis = covG?.visible, viewsVis = viewsG?.visible;
   if (own) own.visible = false; if (covG) covG.visible = false; if (viewsG) viewsG.visible = true;
   devG?.children.forEach(g => g.children.forEach(c => { if (c.userData.frustum) c.visible = false; }));

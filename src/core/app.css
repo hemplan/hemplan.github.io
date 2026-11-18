@@ -154,3 +154,7 @@ input[type=range]{width:100%;accent-color:var(--accent)}
   .panel{overflow:visible}
 }
 @media (prefers-reduced-motion: reduce){ *{transition:none!important} }
+.floorbar{position:absolute;left:10px;top:50%;transform:translateY(-50%);display:grid;gap:4px;z-index:2}
+.floorbar button{font:inherit;font-size:12px;font-weight:500;padding:5px 9px;border-radius:6px;border:1px solid var(--line);background:color-mix(in srgb, var(--panel) 92%, transparent);color:var(--ink);cursor:pointer;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.floorbar button[aria-pressed="true"]{background:var(--ink);color:var(--panel);border-color:var(--ink)}
+.floorbar [data-fladd]{color:var(--muted)}
