@@ -34,7 +34,7 @@ VARIANTS = {
         'appUrl': 'https://claude.ai/artifact/Xvk4PM1qbAnR6a4uxfYS4o',
         'storeKey': 'hemplan3d.pro.v1', 'idb': 'hemplan3d-pro', 'collapseKey': 'hemplan3d.pro.collapsed',
         'templates': '../templates.json',
-        'extra': 'work', 'pages': 'docs/arbete/index.html', 'artifact': 'build/work.html',
+        'extra': 'work', 'js': ['work.js', 'site.js'], 'pages': 'docs/arbete/index.html', 'artifact': 'build/work.html',
     },
 }
 
@@ -59,7 +59,7 @@ def build(v):
     page, css, js = read('core', 'page.html'), read('core', 'app.css'), read('core', 'app.js')
     x = v['extra']
     xcss = read(x, x + '.css') if x else ''
-    xjs = read(x, x + '.js') if x else ''
+    xjs = ''.join(read(x, f) for f in v.get('js', [x + '.js'])) if x else ''
     xhtml = read(x, x + '.html') if x else ''
     slots = dict(re.findall(r'<!--@(\w+)-->\n(.*?)<!--@END-->', xhtml, re.S))
 

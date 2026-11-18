@@ -10,6 +10,36 @@
         <div class="devlist" id="devList"></div>
         <div class="row"><button class="btn small" id="bDevCsv">Exportera utrustningslista</button></div>
       </section>
+      <section class="sec">
+        <h3>Situationsplan och terräng <span class="pill" id="sitePill">ingen</span></h3>
+        <div class="row"><button class="btn small" id="bSitePdf">Importera PDF…</button><button class="btn small" id="bSiteFit">Visa hela</button><button class="btn small danger" id="bSiteDel" hidden>Ta bort</button><input type="file" id="fSitePdf" accept="application/pdf,.pdf" hidden></div>
+        <div id="siteCtl" hidden>
+          <div class="devtypes" id="siteTools">
+            <button class="tool wide" data-tool="sitealign" aria-pressed="false">Passa in</button>
+            <button class="tool wide" data-tool="sitemove" aria-pressed="false">Flytta</button>
+            <button class="tool wide" data-tool="sitepick" aria-pressed="false">Välj linje</button>
+            <button class="tool wide" data-tool="siteslope" aria-pressed="false">Höjdlinje</button>
+            <button class="tool wide" data-tool="sitebuild" aria-pressed="false">Byggnad</button>
+          </div>
+          <div class="grid2">
+            <label class="f">Golvet på Plan 1 (+m)<input type="number" id="siteRef" step="0.01"></label>
+            <label class="f">Vridning (°)<input type="number" id="siteRot" step="0.1"></label>
+          </div>
+          <div class="row"><button class="btn small" id="siteRotL" aria-label="Vrid 1 grad moturs">↺ 1°</button><button class="btn small" id="siteRotR" aria-label="Vrid 1 grad medurs">↻ 1°</button><label class="f inline"><input type="checkbox" id="siteScaleToo"> Justera skalan vid Passa in</label></div>
+          <div class="grid2">
+            <label class="f">Höjdlinje börjar på (m)<input type="number" id="siteStart" step="0.1"></label>
+            <label class="f">Ekvidistans (m)<input type="number" id="siteInt" step="0.1" min="0.05"></label>
+          </div>
+          <div class="grid2">
+            <label class="f inline"><input type="checkbox" id="siteShow_image"> Visa ritningen</label>
+            <label class="f inline"><input type="checkbox" id="siteShow_lines"> Visa linjer</label>
+            <label class="f inline"><input type="checkbox" id="siteShow_terrain"> Terräng i 3D</label>
+            <label class="f inline"><input type="checkbox" id="siteShow_drape"> Ritningen på marken</label>
+          </div>
+          <div class="status" id="siteStat"></div>
+        </div>
+        <div class="hint">Importera situationsplanen som vektor-PDF. Höjdkurvor med höjdtal och lager läses automatiskt. Saknas det, dra en <b>Höjdlinje</b> tvärs över kurvorna. Använd <b>Passa in</b> för att lägga planen rätt mot huset.</div>
+      </section>
 <!--@END-->
 <!--@STAGE-->
       <div class="pip" id="pip" hidden>

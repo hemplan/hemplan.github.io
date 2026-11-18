@@ -20,3 +20,10 @@
 .pipbar span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .pipbar .btn{background:transparent;color:#eee;border-color:rgba(255,255,255,.3);padding:1px 7px}
 .stage.sun-on .pip{top:10px}
+.sdlist{display:grid;gap:2px;max-height:46vh;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:4px}
+.sdrow{display:grid;grid-template-columns:14px minmax(0,1fr) auto 150px;gap:8px;align-items:center;padding:3px 4px;font-size:12px}
+.sdrow .sw{width:12px;height:12px;border-radius:3px;border:1px solid var(--line)}
+.sdrow .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sdrow .dm{font-family:var(--f-mono);font-size:10.5px;color:var(--muted)}
+.sdrow select{font-size:12px;padding:3px 5px}
+#siteTools .tool.wide{font-size:11.5px;padding:6px 4px}

@@ -3,7 +3,9 @@
 // Which build this is. build.py replaces the object between the markers for each variant.
 const VARIANT = /*@VARIANT*/{"id":"home","title":"Hemplan 3D","appUrl":"","storeKey":"hemplan3d.v1","idb":"hemplan3d","collapseKey":"hemplan3d.collapsed","templates":"templates.json"}/*@END*/;
 // Extension points. The home build leaves them empty; the work build (src/work/work.js) adds cameras and alarm devices through them.
-const HOOKS = { normalize:[], afterLoad:[], planUnder:[], planOver:[], hit:[], toolClick:[], inspector:[], field:[], act:[], del:[], dup:[], key:[], build:[], frame:[], view:[], tools:[], select:[], preframe:[], floor:[], floorVis:[] };
+const HOOKS = { normalize:[], afterLoad:[], planUnder:[], planOver:[], hit:[], toolClick:[], inspector:[], field:[], act:[], del:[], dup:[], key:[], build:[], frame:[], view:[], tools:[], select:[], preframe:[], floor:[], floorVis:[], planBase:[], terrain:[], ground:[], imgLoaded:[], toolDown:[], tip:[] };
+// Extra images a variant keeps in IndexedDB: functions st => [[keySuffix, holder]] where holder.src is a data URL
+const IMG_SLOTS = [];
 const runHooks = (k, ...a) => { for (const f of HOOKS[k]) f(...a); };
 const firstHook = (k, ...a) => { for (const f of HOOKS[k]){ const r = f(...a); if (r) return r; } return null; };
 /* ============================== helpers ============================== */
@@ -379,7 +381,7 @@ function idbOpen(){
 async function idbPut(k, v){ const db = await idbOpen(); if (!db) throw new Error('no idb'); await new Promise((res, rej) => { const t = db.transaction('img', 'readwrite'), st = t.objectStore('img'); if (v == null) st.delete(k); else st.put(v, k); t.oncomplete = res; t.onerror = () => rej(t.error); }); }
 async function idbGet(k){ const db = await idbOpen(); if (!db) return null; return new Promise(res => { try { const r = db.transaction('img').objectStore('img').get(k); r.onsuccess = () => res(r.result ?? null); r.onerror = () => res(null); } catch { res(null); } }); }
 const savedImgs = new Map();
-const imgKeys = st => { const pid = st.meta.id, m = new Map(); (st.floors || [{ id:'f0', underlay:st.underlay }]).forEach(f => { if (f.underlay) m.set(pid + ':ul:' + f.id, f.underlay.src || null); }); (st.views || []).forEach(v => m.set(pid + ':v:' + v.id, v.src || null)); return m; };
+const imgKeys = st => { const pid = st.meta.id, m = new Map(); (st.floors || [{ id:'f0', underlay:st.underlay }]).forEach(f => { if (f.underlay) m.set(pid + ':ul:' + f.id, f.underlay.src || null); }); (st.views || []).forEach(v => m.set(pid + ':v:' + v.id, v.src || null)); IMG_SLOTS.forEach(sl => sl(st).forEach(([k, h]) => m.set(pid + ':' + k, h.src || null))); return m; };
 async function saveImages(){
   let ok = true; const imgs = imgKeys(S);
   for (const [k, src] of imgs){ if (src && savedImgs.get(k) !== src){ try { await idbPut(k, src); savedImgs.set(k, src); } catch { ok = false; } } }
@@ -402,6 +404,10 @@ async function hydrateImages(){
     const k = pid + ':v:' + v.id;
     if (!v.src){ let d = await idbGet(k); const fromNew = !!d; if (!d && legacy) d = await idbGet('v:' + v.id); if (d){ v.src = d; if (fromNew) savedImgs.set(k, d); changed3 = true; } }
     else savedImgs.set(k, v.src);
+  }
+  for (const sl of IMG_SLOTS) for (const [suf, h] of sl(S)){
+    const k = pid + ':' + suf;
+    if (!h.src){ const d = await idbGet(k); if (d){ h.src = d; savedImgs.set(k, d); runHooks('imgLoaded'); } } else savedImgs.set(k, h.src);
   }
   renderViews(); if (changed3) buildViews();
   if (legacy){ delete S.meta.legacyImages; scheduleSave(); }
@@ -472,7 +478,7 @@ function openProjects(){
 /* undo */
 const undoStack = [], redoStack = [];
 function pushUndo(){ undoStack.push(serialize(false)); if (undoStack.length > 120) undoStack.shift(); redoStack.length = 0; updUndo(); }
-function restoreSnap(json){ const uls = new Map(S.floors.map(f => [f.id, f.underlay?.src])), vs = new Map((S.views || []).map(v => [v.id, v.src])), meta = S.meta, cf = S.curFloor; S = normalizeState(JSON.parse(json)); S.meta = meta; if (S.floors.some(f => f.id === cf)) S.curFloor = cf; S.floors.forEach(f => { if (f.underlay && !f.underlay.src && uls.get(f.id)) f.underlay.src = uls.get(f.id); }); S.views.forEach(v => { if (!v.src && vs.get(v.id)) v.src = vs.get(v.id); }); afterLoad(false); }
+function restoreSnap(json){ const slotSrc = new Map(); IMG_SLOTS.forEach(sl => sl(S).forEach(([k, h]) => slotSrc.set(k, h.src))); const uls = new Map(S.floors.map(f => [f.id, f.underlay?.src])), vs = new Map((S.views || []).map(v => [v.id, v.src])), meta = S.meta, cf = S.curFloor; S = normalizeState(JSON.parse(json)); S.meta = meta; if (S.floors.some(f => f.id === cf)) S.curFloor = cf; S.floors.forEach(f => { if (f.underlay && !f.underlay.src && uls.get(f.id)) f.underlay.src = uls.get(f.id); }); S.views.forEach(v => { if (!v.src && vs.get(v.id)) v.src = vs.get(v.id); }); IMG_SLOTS.forEach(sl => sl(S).forEach(([k, h]) => { if (!h.src && slotSrc.get(k)) h.src = slotSrc.get(k); })); afterLoad(false); }
 function undo(){ if (!undoStack.length) return; redoStack.push(serialize(false)); restoreSnap(undoStack.pop()); updUndo(); scheduleSave(); }
 function redo(){ if (!redoStack.length) return; undoStack.push(serialize(false)); restoreSnap(redoStack.pop()); updUndo(); scheduleSave(); }
 function updUndo(){ $('#bUndo').disabled = !undoStack.length; $('#bRedo').disabled = !redoStack.length; }
@@ -660,7 +666,12 @@ function getRaster(){
       if (sA >= -e.a - cell*0.5 && sA <= g.len + e.b + cell*0.5 && Math.abs(k) <= t2) blk[j*nx+i] = 1;
     }
   });
-  return (rasters[S.curFloor] = { ...bb, cell, nx, ny, blk });
+  // cells outside the building: everything connected to the border
+  const out = new Uint8Array(nx*ny), st = [];
+  for (let i = 0; i < nx; i++) for (const j of [0, ny - 1]){ const c = j*nx + i; if (!blk[c] && !out[c]){ out[c] = 1; st.push(c); } }
+  for (let j = 0; j < ny; j++) for (const i of [0, nx - 1]){ const c = j*nx + i; if (!blk[c] && !out[c]){ out[c] = 1; st.push(c); } }
+  while (st.length){ const c = st.pop(), ci = c % nx, cj = (c - ci)/nx; for (const q of [ci > 0 ? c-1 : -1, ci < nx-1 ? c+1 : -1, cj > 0 ? c-nx : -1, cj < ny-1 ? c+nx : -1]) if (q >= 0 && !out[q] && !blk[q]){ out[q] = 1; st.push(q); } }
+  return (rasters[S.curFloor] = { ...bb, cell, nx, ny, blk, outMask:out });
 }
 function regionAt(p){
   const r = getRaster(); if (!r) return null;
@@ -690,13 +701,8 @@ function rebuildFloor(){
   const sorted = floorsSorted(), minE = sorted.length ? sorted[0].elev : 0;
   sorted.forEach((fl, idx) => withFloor(fl, () => {
     const r = getRaster(); if (!r) return;
-    const N = r.nx*r.ny, upper = fl.elev > minE + 1, above = sorted[idx + 1];
-    // cells outside the building: everything connected to the border
-    const out = new Uint8Array(N), st = [];
-    for (let i = 0; i < r.nx; i++) for (const j of [0, r.ny - 1]){ const c = j*r.nx + i; if (!r.blk[c] && !out[c]){ out[c] = 1; st.push(c); } }
-    for (let j = 0; j < r.ny; j++) for (const i of [0, r.nx - 1]){ const c = j*r.nx + i; if (!r.blk[c] && !out[c]){ out[c] = 1; st.push(c); } }
-    while (st.length){ const c = st.pop(), ci = c % r.nx, cj = (c - ci)/r.nx; for (const q of [ci > 0 ? c-1 : -1, ci < r.nx-1 ? c+1 : -1, cj > 0 ? c-r.nx : -1, cj < r.ny-1 ? c+r.nx : -1]) if (q >= 0 && !out[q] && !r.blk[q]){ out[q] = 1; st.push(q); } }
-    r.outMask = out;
+    const N = r.nx*r.ny, upper = fl.elev > minE + 1 || !!firstHook('terrain'), above = sorted[idx + 1];
+    const out = r.outMask;
     const holeIn = stairsInto(fl), holeUp = stairsUp(fl);
     fl._holes = holeIn;
     const mark = (list) => { const m = new Uint8Array(N); list.forEach(f => { for (let j = 0; j < r.ny; j++) for (let i = 0; i < r.nx; i++){ if (inFootprint(f, r.minx + (i+.5)*r.cell, r.miny + (j+.5)*r.cell)) m[j*r.nx+i] = 1; } }); return m; };
@@ -888,6 +894,7 @@ function drawPlan(){
   if (ul && img){ ctx.globalAlpha = ul.opacity ?? 0.5; ctx.drawImage(img, sx(ul.x), sy(ul.y), img.naturalWidth*ul.cmPerPx*z, img.naturalHeight*ul.cmPerPx*z); ctx.globalAlpha = 1; }
   // painted floors
   { const fpc = floorPlanCanvases[S.curFloor], fr = fpc && getRaster(); if (fpc && fr){ ctx.globalAlpha = 0.5; ctx.imageSmoothingEnabled = false; ctx.drawImage(fpc, sx(fr.minx), sy(fr.miny), fr.nx*fr.cell*z, fr.ny*fr.cell*z); ctx.imageSmoothingEnabled = true; ctx.globalAlpha = 1; } }
+  runHooks('planBase', ctx, col);
   drawGhostFloor(ctx, col);
   // furniture
   S.furniture.forEach(f => {
@@ -1121,6 +1128,7 @@ planCv.addEventListener('pointerdown', e => {
   { const c = compassPos(); if (Math.hypot(p.px - c.x, p.py - c.y) < c.r + 6){ drag = { kind:'north', ...start }; return; } }
   if (tool === 'room'){ const a = snapPt(p); roomDraw = { a, b:a }; drag = { kind:'room', ...start }; return; }
   if (tool === 'ulmove' && S.underlay){ drag = { kind:'ulmove', ...start, ox:S.underlay.x, oy:S.underlay.y }; return; }
+  { const td = firstHook('toolDown', tool, p, e); if (td){ drag = { ...start, ...td }; return; } }
   if (tool !== 'select'){ drag = { kind:'click', ...start, cx:pv.cx, cy:pv.cy }; return; }
   const h = hitTest(p);
   if (!h){ drag = { kind:'pan', ...start, cx:pv.cx, cy:pv.cy, deselect:true }; return; }
@@ -1256,7 +1264,7 @@ const TOOLS = [
   ['ulmove','Flytta bild','Dra för att flytta planritningsbilden så att den ligger under väggarna.'],
 ];
 function renderTools(){
-  $('#tools').innerHTML = TOOLS.filter(t => !['paintwall','paintfloor'].includes(t[0]) && (!['calib','ulmove'].includes(t[0]) || S.underlay)).map(([k, n]) => `<button class="tool" data-tool="${k}" aria-pressed="${tool===k}">${IC[k]}<span>${n}</span></button>`).join('');
+  $('#tools').innerHTML = TOOLS.filter(t => !t[3] && !['paintwall','paintfloor'].includes(t[0]) && (!['calib','ulmove'].includes(t[0]) || S.underlay)).map(([k, n]) => `<button class="tool" data-tool="${k}" aria-pressed="${tool===k}">${IC[k]}<span>${n}</span></button>`).join('');
   document.querySelectorAll('.tool.wide[data-tool]').forEach(b => b.setAttribute('aria-pressed', b.dataset.tool === tool));
   const t = TOOLS.find(t => t[0] === tool); $('#toolName').textContent = t ? t[1] : ''; $('#toolHint').textContent = t ? t[2] : '';
   runHooks('tools');
@@ -1268,6 +1276,7 @@ function showTip(){
   const tip = $('#tip'); let s = '';
   if (tool === 'paintwall') s = (view === 'walk' ? 'Sikta med korset och klicka på väggen' : 'Klicka på den sida av väggen som ska målas') + ' · Esc avslutar';
   else if (tool === 'paintfloor') s = 'Klicka i ett rum för att byta golvfärg · Esc avslutar';
+  else if (view === 'plan' && firstHook('tip', tool)) s = firstHook('tip', tool);
   else if (view === 'plan'){
     if (tool === 'wall') s = wallDraw.pts.length ? 'Klicka nästa punkt · skriv längd + Enter · Esc avslutar' : 'Klicka där väggen ska börja';
     else if (tool === 'calib') s = calib.pts.length < 2 ? `Klicka punkt ${calib.pts.length + 1} av 2 på bilden` : 'Ange verkligt mått i panelen till höger';
@@ -2297,7 +2306,7 @@ function supportAt(x, y, foot){
   for (const fl of S.floors){
     lowest = Math.min(lowest, fl.elev);
     let ok = true;
-    if (fl !== floorsSorted()[0]){
+    if (fl !== floorsSorted()[0] || firstHook('terrain')){
       const r = withFloor(fl, getRaster);
       if (!r) ok = false;
       else { const i = Math.floor((x - r.minx)/r.cell), j = Math.floor((y - r.miny)/r.cell); ok = i >= 0 && j >= 0 && i < r.nx && j < r.ny && !(r.outMask && r.outMask[j*r.nx+i]); }
@@ -2307,6 +2316,8 @@ function supportAt(x, y, foot){
     for (const f of fl.furniture){ if (!isStair(f)) continue; const l = inFootprint(f, x, y); if (!l) continue;
       const h = fl.elev + (f.elev || 0) + clamp((f.d/2 - l.lz)/f.d, 0, 1)*f.h; if (h <= foot + 55) best = Math.max(best, h); }
   }
+  const tg = firstHook('ground', x, y); // terrain outside the building, in cm
+  if (typeof tg === 'number'){ if (tg <= foot + 55 || best === -Infinity) best = Math.max(best, tg); }
   return best > -Infinity ? best : (lowest === Infinity ? 0 : lowest);
 }
 function stepWalk(dt){
