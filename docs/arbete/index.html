@@ -42,6 +42,12 @@ header{display:flex;flex-wrap:wrap;align-items:center;gap:10px 14px}
 .brand small{font-family:var(--f-mono);font-weight:400;font-size:11px;color:var(--muted)}
 #projName{font:inherit;font-size:13px;border:1px solid transparent;background:transparent;color:var(--ink);padding:4px 6px;border-radius:var(--r);min-width:0;width:170px}
 #projName:hover,#projName:focus{border-color:var(--line);background:var(--field);outline:none}
+.pmeta{font-family:var(--f-mono);font-size:11px;color:var(--muted);white-space:nowrap;cursor:default}
+.plist{display:grid;gap:6px;max-height:55vh;overflow:auto}
+.prow{display:flex;flex-wrap:wrap;gap:6px 12px;align-items:center;justify-content:space-between;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--field)}
+.prow.cur{border-color:var(--accent)}
+.prow .pinfo{display:grid;gap:2px;min-width:0;flex:1 1 260px}
+.prow .pinfo b{font-weight:600}
 .seg{display:inline-flex;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:2px}
 .seg button{border:0;background:transparent;color:var(--muted);font:inherit;font-weight:500;padding:6px 12px;border-radius:6px;cursor:pointer}
 .seg button[aria-pressed="true"]{background:var(--ink);color:var(--panel)}
@@ -191,6 +197,7 @@ input[type=range]{width:100%;accent-color:var(--accent)}
   <header>
     <div class="brand">Hemplan Pro <small>cm</small></div>
     <input id="projName" type="text" aria-label="Projektnamn" value="Min lägenhet">
+    <span class="pmeta" id="projMeta"></span>
     <div class="seg" role="group" aria-label="Vy">
       <button id="vPlan" aria-pressed="true">Planritning</button>
       <button id="v3d" aria-pressed="false">3D-vy</button>
@@ -203,7 +210,7 @@ input[type=range]{width:100%;accent-color:var(--accent)}
       <button class="btn primary" id="bShare">Dela länk</button>
       <button class="btn" id="bExport">Exportera</button>
       <button class="btn" id="bImport">Importera</button>
-      <button class="btn" id="bNew">Ny</button>
+      <button class="btn" id="bNew">Projekt</button>
     </div>
   </header>
   <div class="banner" id="shareBanner" hidden></div>
@@ -674,6 +681,7 @@ function normalizeState(o){
   o.openings = Array.isArray(o.openings) ? o.openings : [];
   o.floorPaint = Array.isArray(o.floorPaint) ? o.floorPaint : [];
   o.views = Array.isArray(o.views) ? o.views : [];
+  o.meta = Object.assign({ id:newPid(), created:Date.now(), modified:Date.now(), rev:1 }, o.meta || {});
   o.library = Array.isArray(o.library) ? o.library : [];
   const hadHeight = o.settings && o.settings.height;
   o.settings = Object.assign({}, d.settings, o.settings || {});
@@ -686,18 +694,37 @@ function normalizeState(o){
   return o;
 }
 
-let saveTimer = 0, saveWarned = false;
+/* ---------- projects: several plans saved in this browser ----------
+   localStorage: <key>.index = list of projects, <key>.current = open project, <key>.p.<id> = the plan.
+   IndexedDB: large images, keyed <project id>:ul and <project id>:v:<view id>. */
+const IDX_KEY = STORE_KEY + '.index', CUR_KEY = STORE_KEY + '.current', PKEY = id => STORE_KEY + '.p.' + id;
+function newPid(){ return uid() + uid(); }
+let projects = [], saveTimer = 0, saveWarned = false, lastSig = null;
+function loadIndex(){ try { projects = JSON.parse(localStorage.getItem(IDX_KEY) || '[]'); if (!Array.isArray(projects)) projects = []; } catch { projects = []; } }
+function saveIndex(){ try { localStorage.setItem(IDX_KEY, JSON.stringify(projects)); } catch {} }
+const entryOf = st => ({ id:st.meta.id, name:st.name || 'Namnlöst', created:st.meta.created, modified:st.meta.modified, rev:st.meta.rev, exportedAt:st.meta.exportedAt || null, exportedRev:st.meta.exportedRev || null });
+function updateIndex(){ const e = entryOf(S), i = projects.findIndex(p => p.id === e.id); if (i >= 0) projects[i] = e; else projects.push(e); saveIndex(); }
+// What counts as a change: everything except where you stand and look, and the time of day
+const contentSig = () => JSON.stringify(S, (k, v) => (k.startsWith('_') || k === 'src' || k === 'viewer' || k === 'meta') ? undefined : v);
+async function persist(){
+  if (sharedMode || !S) return;
+  const sig = contentSig();
+  if (lastSig !== null && sig !== lastSig){ S.meta.rev++; S.meta.modified = Date.now(); }
+  lastSig = sig;
+  const idbOk = await saveImages();
+  try { localStorage.setItem(PKEY(S.meta.id), serialize(!idbOk)); }
+  catch (e) {
+    try { localStorage.setItem(PKEY(S.meta.id), serialize(false)); if (!saveWarned){ toast('Bilderna är för stora för att sparas i webbläsaren. Exportera för att behålla dem.'); saveWarned = true; } } catch {}
+  }
+  try { localStorage.setItem(CUR_KEY, S.meta.id); } catch {}
+  updateIndex(); projMeta();
+}
 function scheduleSave(){
   if (sharedMode) return;
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(async () => {
-    const idbOk = await saveImages();
-    try { localStorage.setItem(STORE_KEY, serialize(!idbOk)); }
-    catch (e) {
-      try { localStorage.setItem(STORE_KEY, serialize(false)); if (!saveWarned) { toast('Bilderna är för stora för att sparas i webbläsaren. Exportera för att behålla dem.'); saveWarned = true; } } catch {}
-    }
-  }, 400);
+  saveTimer = setTimeout(persist, 400);
 }
+async function flushSave(){ clearTimeout(saveTimer); await persist(); }
 // Large images (floor plan, window views) are kept in IndexedDB; the plan itself in localStorage.
 const IMGDB = {};
 function idbOpen(){
@@ -707,25 +734,94 @@ function idbOpen(){
 async function idbPut(k, v){ const db = await idbOpen(); if (!db) throw new Error('no idb'); await new Promise((res, rej) => { const t = db.transaction('img', 'readwrite'), st = t.objectStore('img'); if (v == null) st.delete(k); else st.put(v, k); t.oncomplete = res; t.onerror = () => rej(t.error); }); }
 async function idbGet(k){ const db = await idbOpen(); if (!db) return null; return new Promise(res => { try { const r = db.transaction('img').objectStore('img').get(k); r.onsuccess = () => res(r.result ?? null); r.onerror = () => res(null); } catch { res(null); } }); }
 const savedImgs = new Map();
-function imageEntries(){ const m = new Map(); if (S.underlay) m.set('ul', S.underlay.src || null); (S.views || []).forEach(v => m.set('v:' + v.id, v.src || null)); return m; }
+const imgKeys = st => { const pid = st.meta.id, m = new Map(); if (st.underlay) m.set(pid + ':ul', st.underlay.src || null); (st.views || []).forEach(v => m.set(pid + ':v:' + v.id, v.src || null)); return m; };
 async function saveImages(){
-  let ok = true; const imgs = imageEntries();
+  let ok = true; const imgs = imgKeys(S);
   for (const [k, src] of imgs){ if (src && savedImgs.get(k) !== src){ try { await idbPut(k, src); savedImgs.set(k, src); } catch { ok = false; } } }
   for (const k of [...savedImgs.keys()]) if (!imgs.has(k)){ savedImgs.delete(k); idbPut(k, null).catch(() => {}); }
   return ok;
 }
+// Images of plans saved before projects existed live under the old keys ('ul', 'v:<id>')
 async function hydrateImages(){
-  let changed3 = false;
-  if (S.underlay && !S.underlay.src){ const v = await idbGet('ul'); if (v){ S.underlay.src = v; savedImgs.set('ul', v); reqPlan(); syncSettingsUI(); renderTools(); } }
-  for (const v of S.views || []){ if (!v.src){ const d = await idbGet('v:' + v.id); if (d){ v.src = d; savedImgs.set('v:' + v.id, d); changed3 = true; } } else savedImgs.set('v:' + v.id, v.src); }
-  if (S.underlay?.src) savedImgs.set('ul', S.underlay.src);
+  const pid = S.meta.id, legacy = S.meta.legacyImages; let changed3 = false;
+  if (S.underlay && !S.underlay.src){ let v = await idbGet(pid + ':ul'); const fromNew = !!v; if (!v && legacy) v = await idbGet('ul');
+    if (v){ S.underlay.src = v; if (fromNew) savedImgs.set(pid + ':ul', v); reqPlan(); syncSettingsUI(); renderTools(); } }
+  else if (S.underlay?.src) savedImgs.set(pid + ':ul', S.underlay.src);
+  for (const v of S.views || []){
+    const k = pid + ':v:' + v.id;
+    if (!v.src){ let d = await idbGet(k); const fromNew = !!d; if (!d && legacy) d = await idbGet('v:' + v.id); if (d){ v.src = d; if (fromNew) savedImgs.set(k, d); changed3 = true; } }
+    else savedImgs.set(k, v.src);
+  }
   renderViews(); if (changed3) buildViews();
+  if (legacy){ delete S.meta.legacyImages; scheduleSave(); }
+}
+function readProject(id){ try { const o = JSON.parse(localStorage.getItem(PKEY(id)) || 'null'); return validState(o) ? o : null; } catch { return null; } }
+// Load a plan as the open project
+function useState(st, fit = true){
+  S = normalizeState(st); sel = null; undoStack.length = 0; redoStack.length = 0; savedImgs.clear(); lastSig = contentSig(); ulBlob = null;
+  afterLoad(fit); hydrateImages(); projMeta();
+}
+async function openProject(id){
+  if (S && !sharedMode) await flushSave();
+  const st = readProject(id); if (!st){ toast('Projektet kunde inte läsas.'); return; }
+  useState(st); try { localStorage.setItem(CUR_KEY, id); } catch {}
+}
+async function newProject(example){
+  if (S && !sharedMode) await flushSave();
+  const st = defaultState(); st.meta = { id:newPid(), created:Date.now(), modified:Date.now(), rev:1 };
+  if (!example){ st.walls = []; st.openings = []; st.furniture = []; st.name = 'Nytt projekt'; st.viewer = { x:200, y:200, a:-90 }; }
+  st.library = S ? S.library : []; // your own furniture follows along
+  useState(st); await persist();
+  if (!example){ setTool('room'); toast('Nytt projekt. Rita rum med verktyget Rum eller ladda upp en planritning.'); }
+}
+async function deleteProject(id){
+  const st = id === S.meta.id ? S : readProject(id);
+  if (st) for (const k of imgKeys(Object.assign({}, st, { meta:Object.assign({}, st.meta || {}, { id }) })).keys()) idbPut(k, null).catch(() => {});
+  try { localStorage.removeItem(PKEY(id)); } catch {}
+  projects = projects.filter(p => p.id !== id); saveIndex();
+  if (id === S.meta.id){ if (projects.length) await openProjectNoSave(projects[0].id); else await newProject(true); }
+}
+async function openProjectNoSave(id){ const st = readProject(id); if (st){ useState(st); try { localStorage.setItem(CUR_KEY, id); } catch {} } }
+async function duplicateProject(id){
+  await flushSave();
+  const st = id === S.meta.id ? JSON.parse(serialize(true)) : readProject(id); if (!st) return;
+  const old = st.meta.id; st.meta = { id:newPid(), created:Date.now(), modified:Date.now(), rev:1 }; st.name = (st.name || 'Projekt') + ' (kopia)';
+  // copy images that only exist in IndexedDB
+  if (st.underlay && !st.underlay.src) st.underlay.src = await idbGet(old + ':ul');
+  for (const v of st.views || []) if (!v.src) v.src = await idbGet(old + ':v:' + v.id);
+  useState(st); await persist();
+}
+const fmtTime = t => t ? new Date(t).toLocaleString('sv-SE', { year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' }) : '–';
+function projMeta(){
+  const el = $('#projMeta'); if (!el || !S) return;
+  const m = S.meta, exp = m.exportedRev ? (m.exportedRev === m.rev ? ' · exporterad' : ` · ändrad efter export (v${m.exportedRev})`) : '';
+  el.textContent = sharedMode ? 'delad, sparas inte' : `v${m.rev}${exp}`;
+  el.title = sharedMode ? '' : `Version ${m.rev}. Senast ändrad ${fmtTime(m.modified)}. ${m.exportedAt ? 'Senast exporterad ' + fmtTime(m.exportedAt) + ' (version ' + m.exportedRev + ').' : 'Aldrig exporterad.'}`;
+}
+function openProjects(){
+  const rows = () => [...projects].sort((a, b) => b.modified - a.modified).map(p => `<div class="prow ${p.id === S.meta.id ? 'cur' : ''}" data-pid="${p.id}">
+      <div class="pinfo"><b>${esc(p.name)}</b>${p.id === S.meta.id ? ' <span class="pill on">öppet</span>' : ''}
+        <span class="hint">Version ${p.rev} · ändrad ${fmtTime(p.modified)} · ${p.exportedAt ? `exporterad ${fmtTime(p.exportedAt)} (v${p.exportedRev})` : 'aldrig exporterad'}</span></div>
+      <div class="row">${p.id === S.meta.id ? '' : '<button class="btn small" data-pa="open">Öppna</button>'}<button class="btn small" data-pa="dup">Duplicera</button><button class="btn small danger" data-pa="del">Ta bort</button></div></div>`).join('');
+  const m = modal(`<b>Projekt i den här webbläsaren</b>
+    <div class="plist" id="plist">${rows()}</div>
+    <div class="row"><button class="btn primary" id="pNew">Nytt tomt projekt</button><button class="btn" id="pNewEx">Nytt från exempel</button><button class="btn" data-close>Stäng</button></div>
+    <div class="hint">Projekten sparas bara i den här webbläsaren. Exportera för att flytta dem till en annan enhet eller ha en säkerhetskopia. Versionsnumret ökar för varje ändring, så du kan jämföra en exporterad fil med det som finns här.</div>`);
+  m.querySelector('.card').style.width = 'min(680px, 100%)';
+  $('#plist', m).addEventListener('click', async e => {
+    const b = e.target.closest('[data-pa]'); if (!b) return; const id = b.closest('[data-pid]').dataset.pid;
+    if (b.dataset.pa === 'open'){ m.remove(); await openProject(id); toast('Öppnade ' + (S.name || 'projektet') + '.'); }
+    if (b.dataset.pa === 'dup'){ m.remove(); await duplicateProject(id); toast('Kopian är öppen.'); }
+    if (b.dataset.pa === 'del') confirmBtn(b, 'Ta bort för gott?', async () => { await deleteProject(id); $('#plist', m).innerHTML = rows(); });
+  });
+  $('#pNew', m).addEventListener('click', async () => { m.remove(); await newProject(false); });
+  $('#pNewEx', m).addEventListener('click', async () => { m.remove(); await newProject(true); });
 }
 
 /* undo */
 const undoStack = [], redoStack = [];
 function pushUndo(){ undoStack.push(serialize(false)); if (undoStack.length > 120) undoStack.shift(); redoStack.length = 0; updUndo(); }
-function restoreSnap(json){ const src = S.underlay?.src, vs = new Map((S.views || []).map(v => [v.id, v.src])); S = normalizeState(JSON.parse(json)); if (S.underlay && src && !S.underlay.src) S.underlay.src = src; S.views.forEach(v => { if (!v.src && vs.get(v.id)) v.src = vs.get(v.id); }); afterLoad(false); }
+function restoreSnap(json){ const src = S.underlay?.src, vs = new Map((S.views || []).map(v => [v.id, v.src])), meta = S.meta; S = normalizeState(JSON.parse(json)); S.meta = meta; if (S.underlay && src && !S.underlay.src) S.underlay.src = src; S.views.forEach(v => { if (!v.src && vs.get(v.id)) v.src = vs.get(v.id); }); afterLoad(false); }
 function undo(){ if (!undoStack.length) return; redoStack.push(serialize(false)); restoreSnap(undoStack.pop()); updUndo(); scheduleSave(); }
 function redo(){ if (!redoStack.length) return; undoStack.push(serialize(false)); restoreSnap(redoStack.pop()); updUndo(); scheduleSave(); }
 function updUndo(){ $('#bUndo').disabled = !undoStack.length; $('#bRedo').disabled = !redoStack.length; }
@@ -1496,7 +1592,7 @@ function renderInspector0(){
 }
 function helpHTML(){
   return `<section class="sec"><div class="insp-title"><span class="kind">Inget markerat</span></div>
-    <div class="hint">${S.name === 'Exempellägenhet' ? 'Det här är en exempellägenhet. Ladda upp din egen planritning till vänster, eller rita med verktygen Vägg och Rum. Klicka på <b>Ny</b> för att börja från tomt.' : 'Markera en vägg, öppning eller möbel för att ändra den.'}</div></section>
+    <div class="hint">${S.name === 'Exempellägenhet' ? 'Det här är en exempellägenhet. Ladda upp din egen planritning till vänster, eller rita med verktygen Vägg och Rum. Under <b>Projekt</b> kan du skapa ett nytt, tomt projekt.' : 'Markera en vägg, öppning eller möbel för att ändra den.'}</div></section>
   <section class="sec"><h3>Kortkommandon</h3><dl class="keys">
     <dt><kbd>R</kbd> / <kbd>⇧R</kbd></dt><dd>Vrid möbel 90° åt höger / vänster</dd>
     <dt><kbd>Del</kbd></dt><dd>Ta bort markerat</dd>
@@ -2521,7 +2617,10 @@ function confirmBtn(btn, label, fn){
 }
 function modal(html){ const m = document.createElement('div'); m.className = 'modal'; m.innerHTML = `<div class="card">${html}</div>`; document.body.appendChild(m); m.addEventListener('click', e => { if (e.target === m || e.target.closest('[data-close]')) m.remove(); }); return m; }
 async function exportFile(){
-  const data = JSON.stringify({ app:'hemplan3d', version:1, exported:new Date().toISOString(), state:JSON.parse(serialize(true)) });
+  await flushSave();
+  S.meta.exportedAt = Date.now(); S.meta.exportedRev = S.meta.rev;
+  const data = JSON.stringify({ app:'hemplan3d', version:2, exported:new Date(S.meta.exportedAt).toISOString(), project:{ id:S.meta.id, name:S.name, rev:S.meta.rev, modified:S.meta.modified }, state:JSON.parse(serialize(true)) });
+  persist();
   const fname = (S.name || 'lagenhet').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase() + '.hemplan.json';
   await saveFile(fname, data, 'Exporterad som ' + fname);
 }
@@ -2540,7 +2639,33 @@ function importData(text){
   let o; try { o = JSON.parse(text); } catch { toast('Filen kunde inte läsas som JSON.'); return; }
   const st = o?.state || o;
   if (!validState(st)){ toast('Det här ser inte ut som en Hemplan-fil.'); return; }
-  pushUndo(); S = normalizeState(st); sel = null; ulBlob = null; afterLoad(true); scheduleSave(); toast('Importerad: ' + (S.name || 'lägenhet'));
+  importDialog(st, o.exported ? Date.parse(o.exported) : (st.meta?.exportedAt || null));
+}
+function importDialog(st, exportedAt){
+  const fm = st.meta || {}, same = fm.id && projects.find(p => p.id === fm.id);
+  const cmp = !same ? '' : (fm.rev || 0) > same.rev ? '<b>Filen är nyare</b> än versionen i webbläsaren.' : (fm.rev || 0) < same.rev ? '<b>Filen är äldre</b> än versionen i webbläsaren.' : 'Filen har <b>samma version</b> som den i webbläsaren.';
+  const m = modal(`<b>Importera ${esc(st.name || 'projekt')}</b>
+    <div class="hint">I filen: ${fm.rev ? `version ${fm.rev}, ändrad ${fmtTime(fm.modified)}` : 'ingen versionsinformation (exporterad från en äldre version av appen)'}${exportedAt ? `, exporterad ${fmtTime(exportedAt)}` : ''}.</div>
+    ${same ? `<div class="hint">I webbläsaren: “${esc(same.name)}”, version ${same.rev}, ändrad ${fmtTime(same.modified)}. ${cmp}</div>` : ''}
+    <label class="f inline"><input type="radio" name="impMode" value="new" ${same ? '' : 'checked'}> Importera som nytt projekt</label>
+    <label class="f inline"><input type="radio" name="impMode" value="replace" ${same ? 'checked' : ''}> Ersätt projektet</label>
+    <select id="impTarget">${[...projects].sort((a, b) => b.modified - a.modified).map(p => `<option value="${p.id}" ${(same ? p.id === same.id : p.id === S.meta.id) ? 'selected' : ''}>${esc(p.name)} · v${p.rev} · ${fmtTime(p.modified)}</option>`).join('')}</select>
+    <div class="row"><button class="btn primary" id="impOk">Importera</button><button class="btn" data-close>Avbryt</button></div>`);
+  $('#impOk', m).addEventListener('click', async () => {
+    const mode = m.querySelector('[name=impMode]:checked').value, target = $('#impTarget', m).value;
+    await flushSave();
+    const nst = JSON.parse(JSON.stringify(st));
+    nst.meta = Object.assign({ created:Date.now(), modified:Date.now(), rev:1 }, fm, { exportedAt:exportedAt || fm.exportedAt || null, exportedRev:fm.rev || null });
+    if (mode === 'new'){ nst.meta.id = newPid(); if (projects.some(p => p.name === nst.name)) nst.name += ' (importerad)'; }
+    else {
+      const old = target === S.meta.id ? S : readProject(target);
+      if (old) for (const k of imgKeys(Object.assign({}, old, { meta:{ id:target } })).keys()) idbPut(k, null).catch(() => {});
+      nst.meta.id = target;
+    }
+    delete nst.meta.legacyImages;
+    m.remove(); useState(nst); lastSig = contentSig(); await persist();
+    toast((mode === 'new' ? 'Importerad som nytt projekt: ' : 'Ersatt: ') + (S.name || 'projekt'));
+  });
 }
 $('#bExport').addEventListener('click', exportFile);
 $('#bImport').addEventListener('click', () => {
@@ -2549,9 +2674,7 @@ $('#bImport').addEventListener('click', () => {
   $('#impGo', m).addEventListener('click', () => { const v = $('#impTa', m).value.trim(); if (v){ importData(v); m.remove(); } });
 });
 $('#fImport').addEventListener('change', async e => { const f = e.target.files[0]; e.target.value = ''; if (f) importData(await f.text()); });
-$('#bNew').addEventListener('click', e => confirmBtn(e.currentTarget, 'Rensa allt?', () => {
-  pushUndo(); const keepLib = S.library; S = defaultState(); S.walls = []; S.openings = []; S.furniture = []; S.library = keepLib; S.name = 'Min lägenhet'; S.viewer = { x:200, y:200, a:-90 }; sel = null; afterLoad(true); scheduleSave(); setTool('room'); toast('Tomt. Rita rum med verktyget Rum eller ladda upp en planritning.');
-}));
+$('#bNew').addEventListener('click', openProjects);
 $('#bUndo').addEventListener('click', undo); $('#bRedo').addEventListener('click', redo);
 
 /* ============================== sharing ============================== */
@@ -2571,7 +2694,7 @@ async function unpack(d){
   if (d.enc === 'gz64'){ const bin = atob(d.z), u = Uint8Array.from(bin, c => c.charCodeAt(0)); return JSON.parse(await new Response(new Blob([u]).stream().pipeThrough(new DecompressionStream('gzip'))).text()); }
   return JSON.parse(d.z);
 }
-function shareSnapshot(){ const o = JSON.parse(serialize(false)); delete o.underlay; delete o.library; delete o.shareId; o.views = []; return o; }
+function shareSnapshot(){ const o = JSON.parse(serialize(false)); delete o.underlay; delete o.library; delete o.shareId; delete o.meta; o.views = []; return o; }
 const shareLink = id => APP_URL + '#hem-' + id;
 function openShare(){
   const m = modal(`<b>Dela din möblerade lägenhet</b>
@@ -2611,17 +2734,18 @@ function banner(text, actions = []){
 $('#shareBanner').addEventListener('click', e => {
   const b = e.target.closest('[data-ban]'); if (!b) return;
   if (b.dataset.ban === 'mine') leaveShared();
-  if (b.dataset.ban === 'copy') confirmBtn(b, 'Ersätt min egen lägenhet?', () => {
-    sharedMode = null; S.name = (S.name || 'Lägenhet') + ' (kopia)'; delete S.shareId; $('#projName').value = S.name;
+  if (b.dataset.ban === 'copy'){
+    sharedMode = null; S.name = (S.name || 'Lägenhet') + ' (kopia)'; delete S.shareId; S.meta = { id:newPid(), created:Date.now(), modified:Date.now(), rev:1 }; $('#projName').value = S.name;
     try { history.replaceState(null, '', location.pathname + location.search); } catch { location.hash = ''; }
-    scheduleSave(); banner(''); toast('Sparad som din egen lägenhet i den här webbläsaren.');
-  });
+    lastSig = contentSig(); persist(); banner(''); toast('Sparad som ett nytt projekt i den här webbläsaren.');
+  }
 });
 function leaveShared(){
   sharedMode = null; banner('');
   try { history.replaceState(null, '', location.pathname + location.search); } catch { location.hash = ''; }
-  let loaded = null; try { const raw = localStorage.getItem(STORE_KEY); if (raw){ const o = JSON.parse(raw); if (validState(o)) loaded = o; } } catch {}
-  S = loaded ? normalizeState(loaded) : defaultState(); sel = null; undoStack.length = 0; redoStack.length = 0; afterLoad(true); hydrateImages();
+  loadIndex(); const id = (() => { try { return localStorage.getItem(CUR_KEY); } catch { return null; } })();
+  const st = (id && readProject(id)) || (projects[0] && readProject(projects[0].id));
+  if (st) useState(st); else newProject(true);
 }
 async function checkHash(){
   const m = location.hash.match(/^#hem-([a-z0-9]{4,40})$/i);
@@ -2644,17 +2768,31 @@ window.addEventListener('hashchange', checkHash);
 
 /* ============================== work version: cameras and alarm devices ==============================
    Uses the core through HOOKS (see the top of app.js). Everything here only exists in the work build. */
+// size: width × height × depth in cm. zDef(ceiling, door) = default height to the middle of the device.
+// mount: 'wall' (back against the wall, facing into the room), 'ceiling', 'door' (above the door frame)
+const WHITE = '#f4f4f2';
 const DEV_TYPES = {
-  camera:  { label:'Kamera',           short:'K',  color:'#d4402b', z:260, kind:'camera' },
-  pir:     { label:'IR-detektor',      short:'IR', color:'#2b7bd4', z:220, kind:'wedge',  range:12, angle:90 },
-  glass:   { label:'Glaskross',        short:'GK', color:'#7a4fd0', z:220, kind:'circle', range:9 },
-  smoke:   { label:'Brandvarnare',     short:'BV', color:'#e08a1e', z:248, kind:'circle', range:5, ceiling:true },
-  contact: { label:'Magnetkontakt',    short:'MK', color:'#3a8f5a', z:200, kind:null },
-  panel:   { label:'Manöverpanel',     short:'MP', color:'#4a5560', z:150, kind:null },
-  central: { label:'Centralapparat',   short:'CA', color:'#4a5560', z:170, kind:null },
-  siren:   { label:'Siren',            short:'S',  color:'#c2185b', z:240, kind:null },
-  reader:  { label:'Kortläsare',       short:'KL', color:'#5b5f63', z:110, kind:null },
+  camera:  { label:'Kamera',             short:'K',  color:'#d4402b', kind:'camera', mount:'wall', zDef:c => c - 15, zHint:'15 cm under taket' },
+  pir:     { label:'IR-detektor',        short:'IR', color:'#2b7bd4', kind:'wedge',  mount:'wall', range:12, angle:90, size:[6.15, 12.92, 5.09], body:WHITE, zDef:() => 220, zHint:'220 cm' },
+  glass:   { label:'Akustisk glaskross', short:'GK', color:'#7a4fd0', kind:'circle', mount:'ceiling', range:9, size:[6.8, 3.9, 11], body:WHITE, zDef:c => c - 3.9/2, zHint:'i taket' },
+  smoke:   { label:'Brandvarnare',       short:'BV', color:'#e08a1e', kind:'circle', mount:'ceiling', range:5, size:[10, 4, 10], body:WHITE, round:true, zDef:c => c - 2, zHint:'i taket' },
+  contact: { label:'Magnetkontakt',      short:'MK', color:'#3a8f5a', kind:null, mount:'door', size:[6.5, 2, 1.5], body:WHITE, zDef:(c, door) => (door ? door + 2 : 207) + 1, zHint:'överkant dörr' },
+  panel:   { label:'Manöverpanel',       short:'MP', color:'#4a5560', kind:null, mount:'wall', size:[16.3, 11.9, 1.45], body:WHITE, screen:true, zDef:() => 140, zHint:'140 cm' },
+  central: { label:'Centralapparat',     short:'CA', color:'#4a5560', kind:null, mount:'wall', size:[32.5, 43.5, 9], body:'#d8dce3', zDef:() => 170, zHint:'170 cm' },
+  siren:   { label:'Siren',              short:'S',  color:'#c2185b', kind:null, mount:'wall', size:[10, 13.5, 3.5], body:WHITE, zDef:c => c - 10 - 13.5/2, zHint:'10 cm under taket' },
+  reader:  { label:'Kortläsare',         short:'KL', color:'#5b5f63', kind:null, mount:'wall', size:[7.2, 11.3, 2.05], body:'#1f1f1f', zDef:() => 110, zHint:'110 cm' },
 };
+// Ceiling height at a point: the height of the nearest wall
+function ceilingAt(x, y, walls = S.walls){
+  let best = null, bd = Infinity;
+  walls.forEach(w => { const r = segDist({ x, y }, w.a, w.b); if (r.d < bd){ bd = r.d; best = w; } });
+  return best ? best.h : (S?.settings?.defH || 250);
+}
+// Top of a door near a wall position, for door contacts
+function doorTopAt(w, s){
+  const o = S.openings.find(o => o.wall === w.id && o.type !== 'window' && Math.abs(s - o.off) <= o.w/2 + 15);
+  return o ? o.sill + o.h : null;
+}
 // Approximate active sensor sizes (width × height, mm). A datasheet's field of view is more exact.
 const SENSORS = { '1/3" (4:3)':[4.8, 3.6], '1/2.9"':[5.1, 2.9], '1/2.8"':[5.6, 3.2], '1/2.7"':[5.9, 3.3], '1/2"':[7.0, 3.9], '1/1.8"':[7.8, 4.4], '1/1.2"':[11.1, 6.2] };
 const RESOLUTIONS = [['2 MP', 1920, 1080], ['4 MP', 2560, 1440], ['5 MP', 2592, 1944], ['6 MP', 3072, 2048], ['8 MP (4K)', 3840, 2160], ['12 MP', 4000, 3000]];
@@ -2664,6 +2802,8 @@ let devType = 'camera';
 
 HOOKS.normalize.push(o => {
   o.devices = Array.isArray(o.devices) ? o.devices : [];
+  // cameras placed before the ceiling fix ended up in the ceiling; move them just below it
+  o.devices.forEach(d => { if (d.type === 'camera'){ const c = ceilingAt(d.x, d.y, o.walls || []); if (d.z > c - 8) d.z = r1(c - 15); } });
   o.work = Object.assign({ target:100, show:true }, o.work || {});
 });
 const devById = id => S.devices.find(d => d.id === id);
@@ -2678,9 +2818,9 @@ function camFov(d){
 // distance (cm) where the camera still gives p pixels per metre across the image width
 const doriDist = (d, p) => d.resW / (2*p*Math.tan(rad(camFov(d).h)/2)) * 100;
 
-function newDevice(type, x, y, a){
+function newDevice(type, x, y, a, door){
   const t = DEV_TYPES[type], n = S.devices.filter(d => d.type === type).length + 1;
-  const d = { id:uid(), type, name:t.short + n, x:r1(x), y:r1(y), z:t.z, a:Math.round(a || 0), note:'' };
+  const d = { id:uid(), type, name:t.short + n, x:r1(x), y:r1(y), z:r1(t.zDef(ceilingAt(x, y), door)), a:Math.round(a || 0), note:'' };
   if (type === 'camera') Object.assign(d, { tilt:25, fovMode:'lens', focal:2.8, sensor:'1/2.8"', hfov:100, resW:2560, resH:1440 });
   if (t.range) d.range = t.range;
   if (t.angle) d.angle = t.angle;
@@ -2775,18 +2915,18 @@ HOOKS.planOver.push((ctx, col) => {
 });
 
 /* ---------- placing, selecting, moving ---------- */
-function wallSnap(p, maxPx = 26){
+function wallSnap(p, maxPx = 26, depth = 8){
   let best = null, bd = Infinity;
   S.walls.forEach(w => { const r = segDist(p, w.a, w.b); if (r.t >= 0 && r.t <= 1 && r.d < bd){ bd = r.d; best = { w, r }; } });
   if (!best || bd > best.w.t/2 + maxPx/pv.z) return null;
-  const g = wg(best.w), side = ((p.x - best.w.a.x)*g.nx + (p.y - best.w.a.y)*g.ny) >= 0 ? 1 : -1, off = best.w.t/2 + 4, s = clamp(best.r.s, 0, g.len);
-  return { x:r1(best.w.a.x + g.ux*s + g.nx*side*off), y:r1(best.w.a.y + g.uy*s + g.ny*side*off), a:Math.round(deg(Math.atan2(g.ny*side, g.nx*side))) };
+  const g = wg(best.w), side = ((p.x - best.w.a.x)*g.nx + (p.y - best.w.a.y)*g.ny) >= 0 ? 1 : -1, off = best.w.t/2 + depth/2 + 0.2, s = clamp(best.r.s, 0, g.len);
+  return { x:r1(best.w.a.x + g.ux*s + g.nx*side*off), y:r1(best.w.a.y + g.uy*s + g.ny*side*off), a:Math.round(deg(Math.atan2(g.ny*side, g.nx*side))), door:doorTopAt(best.w, s) };
 }
 HOOKS.toolClick.push((tl, p, raw) => {
   if (tl !== 'device') return false;
-  const t = DEV_TYPES[devType], sn = t.ceiling ? null : wallSnap(raw);
+  const t = DEV_TYPES[devType], sn = t.mount === 'ceiling' ? null : wallSnap(raw, 26, devDepth(t));
   pushUndo();
-  const d = newDevice(devType, sn ? sn.x : raw.x, sn ? sn.y : raw.y, sn ? sn.a : 0);
+  const d = newDevice(devType, sn ? sn.x : raw.x, sn ? sn.y : raw.y, sn ? sn.a : 0, sn?.door);
   S.devices.push(d); devChanged(); select({ kind:'dev', id:d.id });
   return true;
 });
@@ -2795,10 +2935,11 @@ HOOKS.hit.push(p => {
   for (let i = S.devices.length - 1; i >= 0; i--){ const d = S.devices[i]; if (Math.hypot(sx(d.x) - p.px, sy(d.y) - p.py) < 11) return dragMove(d, p); }
   return null;
 });
+const devDepth = t => t.kind === 'camera' ? 12 : (t.size ? t.size[2] : 8);
 function dragMove(d, p0){
   const ox = d.x, oy = d.y;
   return { kind:'custom', down:() => select({ kind:'dev', id:d.id }),
-    move:(p, e, once) => { once(); const raw = { x:ox + (p.x - p0.x), y:oy + (p.y - p0.y) }, sn = (DT(d).ceiling || e.altKey) ? null : wallSnap(raw, 14);
+    move:(p, e, once) => { once(); const raw = { x:ox + (p.x - p0.x), y:oy + (p.y - p0.y) }, sn = (DT(d).mount === 'ceiling' || e.altKey) ? null : wallSnap(raw, 14, devDepth(DT(d)));
       if (sn){ d.x = sn.x; d.y = sn.y; d.a = sn.a; } else { d.x = Math.round(raw.x); d.y = Math.round(raw.y); } devChanged(true); },
     end:(moved) => { if (moved){ devChanged(); renderInspector(); } } };
 }
@@ -2827,7 +2968,8 @@ HOOKS.inspector.push(s => {
   let html = `<section class="sec">
     <div class="insp-title"><span class="kind" style="color:${t.color}">${esc(t.label)}</span></div>
     <label class="f">Namn<input type="text" data-k="dev:name" value="${esc(d.name)}"></label>
-    <div class="grid3">${nf('X', 'dev:x', d.x)}${nf('Y', 'dev:y', d.y)}${nf('Höjd (cm)', 'dev:z', d.z, 'min="0"')}</div>
+    <div class="grid3">${nf('X', 'dev:x', d.x)}${nf('Y', 'dev:y', d.y)}${nf('Höjd till mitten (cm)', 'dev:z', d.z, 'min="0"')}</div>
+    <div class="row"><span class="hint">Standard: ${esc(t.zHint)}${t.size ? ` · ${String(t.size[0]*10).replace('.', ',')} × ${String(t.size[1]*10).replace('.', ',')} × ${String(t.size[2]*10).replace('.', ',')} mm` : ''}</span><button class="btn small" data-act="dev-zdef">Standardhöjd</button></div>
     ${t.kind === 'camera' || t.kind === 'wedge' ? `<div class="grid2">${nf('Riktning °', 'dev:a', d.a)}${cam ? nf('Lutning nedåt °', 'dev:tilt', d.tilt, 'min="-30" max="90"') : '<div></div>'}</div>
     <div class="row"><button class="btn small" data-act="dev-rot--15">↺ 15°</button><button class="btn small" data-act="dev-rot-15">↻ 15°</button></div>` : ''}
   </section>`;
@@ -2877,6 +3019,7 @@ HOOKS.act.push(a => {
   const d = devById(sel.id); if (!d) return false;
   if (a.startsWith('dev-rot')){ pushUndo(); d.a = (((d.a + num(a.slice(8))) % 360) + 360) % 360; devChanged(); renderInspector(); return true; }
   if (a === 'dev-dup'){ dupDevice(d); return true; }
+  if (a === 'dev-zdef'){ pushUndo(); let door = null; const sn = wallSnap({ x:d.x, y:d.y }, 40, devDepth(DT(d))); if (sn) door = sn.door; d.z = r1(DT(d).zDef(ceilingAt(d.x, d.y), door)); devChanged(); renderInspector(); return true; }
   return false;
 });
 
@@ -2920,8 +3063,12 @@ function buildDevices3D(){
       const housing = new THREE.Mesh(new THREE.BoxGeometry(16, 8, 8), mat('#f2f2f0')); housing.position.x = 4;
       const lens = new THREE.Mesh(new THREE.CylinderGeometry(2.6, 2.6, 2, 16).rotateZ(Math.PI/2), dark); lens.position.x = 12.5;
       const head = new THREE.Group(); head.add(housing, lens); head.rotation.set(0, -rad(d.a), -rad(d.tilt || 0), 'YXZ');
-      const mount = new THREE.Mesh(new THREE.CylinderGeometry(1.5, 1.5, 8, 8), body); mount.position.y = 4;
-      g.add(head, mount);
+      // wall bracket back to the wall
+      const arm = new THREE.Group(); arm.rotation.y = -rad(d.a);
+      const bracket = new THREE.Mesh(new THREE.BoxGeometry(7, 3, 3), mat('#e8e8e6')); bracket.position.x = -3.5;
+      const plate = new THREE.Mesh(new THREE.BoxGeometry(1, 9, 9), mat('#e8e8e6')); plate.position.x = -6.5;
+      arm.add(bracket, plate);
+      g.add(head, arm);
       // frustum outline
       const f = camFov(d), L = Math.min(doriDist(d, 25), 3000), hw = Math.tan(rad(f.h)/2)*L, hh = Math.tan(rad(f.v)/2)*L;
       const pts = [[0, 0, 0], [L, hh, hw], [0, 0, 0], [L, hh, -hw], [0, 0, 0], [L, -hh, hw], [0, 0, 0], [L, -hh, -hw], [L, hh, hw], [L, hh, -hw], [L, hh, -hw], [L, -hh, -hw], [L, -hh, -hw], [L, -hh, hw], [L, -hh, hw], [L, hh, hw]];
@@ -2929,9 +3076,15 @@ function buildDevices3D(){
       const lm = new THREE.LineBasicMaterial({ color:t.color, transparent:true, opacity:0.55 }); lm.userData.own = true;
       const lines = new THREE.LineSegments(lg, lm); lines.rotation.copy(head.rotation); lines.userData.frustum = true; g.add(lines);
     } else {
-      const m = new THREE.Mesh(t.ceiling ? new THREE.CylinderGeometry(6, 6, 4, 18) : new THREE.BoxGeometry(8, 11, 4), body);
-      if (!t.ceiling) m.rotation.y = -rad(d.a) + Math.PI/2;
-      g.add(m);
+      const [W, H, D] = t.size, bm = mat(t.body || WHITE);
+      const inner = new THREE.Group(); inner.rotation.y = Math.PI/2 - rad(d.a); // local +z = front, facing direction a
+      const m = new THREE.Mesh(t.round ? new THREE.CylinderGeometry(W/2, W/2, H, 24) : new THREE.BoxGeometry(W, H, D), bm);
+      inner.add(m);
+      if (t.screen){ const scr = new THREE.Mesh(new THREE.BoxGeometry(W*0.62, H*0.34, 0.2), mat('#263238')); scr.position.set(0, H*0.18, D/2 + 0.1); inner.add(scr); }
+      // a coloured stripe shows the device type
+      const tag = new THREE.Mesh(new THREE.BoxGeometry(Math.min(W*0.5, 3), Math.min(H*0.12, 0.8), 0.2), mat(t.color)); tag.position.set(0, -H*0.38, (t.round ? W/2 : D/2) + 0.1);
+      if (t.mount !== 'ceiling') inner.add(tag);
+      g.add(inner);
     }
     g.traverse(o => { if (o.isMesh) o.castShadow = false; });
     devG.add(g);
@@ -2994,7 +3147,7 @@ $('#pipSize').addEventListener('click', () => { pipBig = !pipBig; $('#pip').clas
 
 /* ============================== boot ============================== */
 function afterLoad(fit){
-  rebuildAll(); syncSettingsUI(); renderTools(); renderLibrary(); renderInspector(); renderSwatches(); syncSunUI(); updUndo(); renderViews(); runHooks('afterLoad'); applyCollapse($('#left'));
+  rebuildAll(); syncSettingsUI(); renderTools(); renderLibrary(); renderInspector(); renderSwatches(); syncSunUI(); updUndo(); renderViews(); runHooks('afterLoad'); applyCollapse($('#left')); projMeta();
   if (fit) fitPlan();
 }
 let last = performance.now();
@@ -3012,9 +3165,15 @@ function start(snapshot){
   init3D();
   let loaded = null;
   if (snapshot && validState(snapshot)) loaded = snapshot;
-  else { try { const raw = localStorage.getItem(STORE_KEY); if (raw){ const o = JSON.parse(raw); if (validState(o)) loaded = o; } } catch {} }
-  S = loaded ? normalizeState(loaded) : defaultState();
-  afterLoad(false); hydrateImages();
+  loadIndex();
+  if (!loaded){ try { const id = localStorage.getItem(CUR_KEY); if (id) loaded = readProject(id); } catch {} }
+  if (!loaded && projects[0]) loaded = readProject(projects[0].id);
+  if (!loaded && !projects.length){
+    // first start with projects: move a plan saved by the earlier one-plan version into a project
+    try { const raw = localStorage.getItem(STORE_KEY); if (raw){ const o = JSON.parse(raw); if (validState(o)){ loaded = o; o.meta = { id:newPid(), created:Date.now(), modified:Date.now(), rev:1, legacyImages:true }; } } } catch {}
+  }
+  useState(loaded || defaultState(), false);
+  persist();
   requestAnimationFrame(() => { fitPlan(); requestAnimationFrame(loop); });
   if (!ok3d){ $('#v3d').disabled = true; $('#vWalk').disabled = true; }
   matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', () => { reqPlan(); setSky(); });

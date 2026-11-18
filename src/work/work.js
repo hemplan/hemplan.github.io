@@ -1,16 +1,30 @@
 /* ============================== work version: cameras and alarm devices ==============================
    Uses the core through HOOKS (see the top of app.js). Everything here only exists in the work build. */
+// size: width × height × depth in cm. zDef(ceiling, door) = default height to the middle of the device.
+// mount: 'wall' (back against the wall, facing into the room), 'ceiling', 'door' (above the door frame)
+const WHITE = '#f4f4f2';
 const DEV_TYPES = {
-  camera:  { label:'Kamera',           short:'K',  color:'#d4402b', z:260, kind:'camera' },
-  pir:     { label:'IR-detektor',      short:'IR', color:'#2b7bd4', z:220, kind:'wedge',  range:12, angle:90 },
-  glass:   { label:'Glaskross',        short:'GK', color:'#7a4fd0', z:220, kind:'circle', range:9 },
-  smoke:   { label:'Brandvarnare',     short:'BV', color:'#e08a1e', z:248, kind:'circle', range:5, ceiling:true },
-  contact: { label:'Magnetkontakt',    short:'MK', color:'#3a8f5a', z:200, kind:null },
-  panel:   { label:'Manöverpanel',     short:'MP', color:'#4a5560', z:150, kind:null },
-  central: { label:'Centralapparat',   short:'CA', color:'#4a5560', z:170, kind:null },
-  siren:   { label:'Siren',            short:'S',  color:'#c2185b', z:240, kind:null },
-  reader:  { label:'Kortläsare',       short:'KL', color:'#5b5f63', z:110, kind:null },
+  camera:  { label:'Kamera',             short:'K',  color:'#d4402b', kind:'camera', mount:'wall', zDef:c => c - 15, zHint:'15 cm under taket' },
+  pir:     { label:'IR-detektor',        short:'IR', color:'#2b7bd4', kind:'wedge',  mount:'wall', range:12, angle:90, size:[6.15, 12.92, 5.09], body:WHITE, zDef:() => 220, zHint:'220 cm' },
+  glass:   { label:'Akustisk glaskross', short:'GK', color:'#7a4fd0', kind:'circle', mount:'ceiling', range:9, size:[6.8, 3.9, 11], body:WHITE, zDef:c => c - 3.9/2, zHint:'i taket' },
+  smoke:   { label:'Brandvarnare',       short:'BV', color:'#e08a1e', kind:'circle', mount:'ceiling', range:5, size:[10, 4, 10], body:WHITE, round:true, zDef:c => c - 2, zHint:'i taket' },
+  contact: { label:'Magnetkontakt',      short:'MK', color:'#3a8f5a', kind:null, mount:'door', size:[6.5, 2, 1.5], body:WHITE, zDef:(c, door) => (door ? door + 2 : 207) + 1, zHint:'överkant dörr' },
+  panel:   { label:'Manöverpanel',       short:'MP', color:'#4a5560', kind:null, mount:'wall', size:[16.3, 11.9, 1.45], body:WHITE, screen:true, zDef:() => 140, zHint:'140 cm' },
+  central: { label:'Centralapparat',     short:'CA', color:'#4a5560', kind:null, mount:'wall', size:[32.5, 43.5, 9], body:'#d8dce3', zDef:() => 170, zHint:'170 cm' },
+  siren:   { label:'Siren',              short:'S',  color:'#c2185b', kind:null, mount:'wall', size:[10, 13.5, 3.5], body:WHITE, zDef:c => c - 10 - 13.5/2, zHint:'10 cm under taket' },
+  reader:  { label:'Kortläsare',         short:'KL', color:'#5b5f63', kind:null, mount:'wall', size:[7.2, 11.3, 2.05], body:'#1f1f1f', zDef:() => 110, zHint:'110 cm' },
 };
+// Ceiling height at a point: the height of the nearest wall
+function ceilingAt(x, y, walls = S.walls){
+  let best = null, bd = Infinity;
+  walls.forEach(w => { const r = segDist({ x, y }, w.a, w.b); if (r.d < bd){ bd = r.d; best = w; } });
+  return best ? best.h : (S?.settings?.defH || 250);
+}
+// Top of a door near a wall position, for door contacts
+function doorTopAt(w, s){
+  const o = S.openings.find(o => o.wall === w.id && o.type !== 'window' && Math.abs(s - o.off) <= o.w/2 + 15);
+  return o ? o.sill + o.h : null;
+}
 // Approximate active sensor sizes (width × height, mm). A datasheet's field of view is more exact.
 const SENSORS = { '1/3" (4:3)':[4.8, 3.6], '1/2.9"':[5.1, 2.9], '1/2.8"':[5.6, 3.2], '1/2.7"':[5.9, 3.3], '1/2"':[7.0, 3.9], '1/1.8"':[7.8, 4.4], '1/1.2"':[11.1, 6.2] };
 const RESOLUTIONS = [['2 MP', 1920, 1080], ['4 MP', 2560, 1440], ['5 MP', 2592, 1944], ['6 MP', 3072, 2048], ['8 MP (4K)', 3840, 2160], ['12 MP', 4000, 3000]];
@@ -20,6 +34,8 @@ let devType = 'camera';
 
 HOOKS.normalize.push(o => {
   o.devices = Array.isArray(o.devices) ? o.devices : [];
+  // cameras placed before the ceiling fix ended up in the ceiling; move them just below it
+  o.devices.forEach(d => { if (d.type === 'camera'){ const c = ceilingAt(d.x, d.y, o.walls || []); if (d.z > c - 8) d.z = r1(c - 15); } });
   o.work = Object.assign({ target:100, show:true }, o.work || {});
 });
 const devById = id => S.devices.find(d => d.id === id);
@@ -34,9 +50,9 @@ function camFov(d){
 // distance (cm) where the camera still gives p pixels per metre across the image width
 const doriDist = (d, p) => d.resW / (2*p*Math.tan(rad(camFov(d).h)/2)) * 100;
 
-function newDevice(type, x, y, a){
+function newDevice(type, x, y, a, door){
   const t = DEV_TYPES[type], n = S.devices.filter(d => d.type === type).length + 1;
-  const d = { id:uid(), type, name:t.short + n, x:r1(x), y:r1(y), z:t.z, a:Math.round(a || 0), note:'' };
+  const d = { id:uid(), type, name:t.short + n, x:r1(x), y:r1(y), z:r1(t.zDef(ceilingAt(x, y), door)), a:Math.round(a || 0), note:'' };
   if (type === 'camera') Object.assign(d, { tilt:25, fovMode:'lens', focal:2.8, sensor:'1/2.8"', hfov:100, resW:2560, resH:1440 });
   if (t.range) d.range = t.range;
   if (t.angle) d.angle = t.angle;
@@ -131,18 +147,18 @@ HOOKS.planOver.push((ctx, col) => {
 });
 
 /* ---------- placing, selecting, moving ---------- */
-function wallSnap(p, maxPx = 26){
+function wallSnap(p, maxPx = 26, depth = 8){
   let best = null, bd = Infinity;
   S.walls.forEach(w => { const r = segDist(p, w.a, w.b); if (r.t >= 0 && r.t <= 1 && r.d < bd){ bd = r.d; best = { w, r }; } });
   if (!best || bd > best.w.t/2 + maxPx/pv.z) return null;
-  const g = wg(best.w), side = ((p.x - best.w.a.x)*g.nx + (p.y - best.w.a.y)*g.ny) >= 0 ? 1 : -1, off = best.w.t/2 + 4, s = clamp(best.r.s, 0, g.len);
-  return { x:r1(best.w.a.x + g.ux*s + g.nx*side*off), y:r1(best.w.a.y + g.uy*s + g.ny*side*off), a:Math.round(deg(Math.atan2(g.ny*side, g.nx*side))) };
+  const g = wg(best.w), side = ((p.x - best.w.a.x)*g.nx + (p.y - best.w.a.y)*g.ny) >= 0 ? 1 : -1, off = best.w.t/2 + depth/2 + 0.2, s = clamp(best.r.s, 0, g.len);
+  return { x:r1(best.w.a.x + g.ux*s + g.nx*side*off), y:r1(best.w.a.y + g.uy*s + g.ny*side*off), a:Math.round(deg(Math.atan2(g.ny*side, g.nx*side))), door:doorTopAt(best.w, s) };
 }
 HOOKS.toolClick.push((tl, p, raw) => {
   if (tl !== 'device') return false;
-  const t = DEV_TYPES[devType], sn = t.ceiling ? null : wallSnap(raw);
+  const t = DEV_TYPES[devType], sn = t.mount === 'ceiling' ? null : wallSnap(raw, 26, devDepth(t));
   pushUndo();
-  const d = newDevice(devType, sn ? sn.x : raw.x, sn ? sn.y : raw.y, sn ? sn.a : 0);
+  const d = newDevice(devType, sn ? sn.x : raw.x, sn ? sn.y : raw.y, sn ? sn.a : 0, sn?.door);
   S.devices.push(d); devChanged(); select({ kind:'dev', id:d.id });
   return true;
 });
@@ -151,10 +167,11 @@ HOOKS.hit.push(p => {
   for (let i = S.devices.length - 1; i >= 0; i--){ const d = S.devices[i]; if (Math.hypot(sx(d.x) - p.px, sy(d.y) - p.py) < 11) return dragMove(d, p); }
   return null;
 });
+const devDepth = t => t.kind === 'camera' ? 12 : (t.size ? t.size[2] : 8);
 function dragMove(d, p0){
   const ox = d.x, oy = d.y;
   return { kind:'custom', down:() => select({ kind:'dev', id:d.id }),
-    move:(p, e, once) => { once(); const raw = { x:ox + (p.x - p0.x), y:oy + (p.y - p0.y) }, sn = (DT(d).ceiling || e.altKey) ? null : wallSnap(raw, 14);
+    move:(p, e, once) => { once(); const raw = { x:ox + (p.x - p0.x), y:oy + (p.y - p0.y) }, sn = (DT(d).mount === 'ceiling' || e.altKey) ? null : wallSnap(raw, 14, devDepth(DT(d)));
       if (sn){ d.x = sn.x; d.y = sn.y; d.a = sn.a; } else { d.x = Math.round(raw.x); d.y = Math.round(raw.y); } devChanged(true); },
     end:(moved) => { if (moved){ devChanged(); renderInspector(); } } };
 }
@@ -183,7 +200,8 @@ HOOKS.inspector.push(s => {
   let html = `<section class="sec">
     <div class="insp-title"><span class="kind" style="color:${t.color}">${esc(t.label)}</span></div>
     <label class="f">Namn<input type="text" data-k="dev:name" value="${esc(d.name)}"></label>
-    <div class="grid3">${nf('X', 'dev:x', d.x)}${nf('Y', 'dev:y', d.y)}${nf('Höjd (cm)', 'dev:z', d.z, 'min="0"')}</div>
+    <div class="grid3">${nf('X', 'dev:x', d.x)}${nf('Y', 'dev:y', d.y)}${nf('Höjd till mitten (cm)', 'dev:z', d.z, 'min="0"')}</div>
+    <div class="row"><span class="hint">Standard: ${esc(t.zHint)}${t.size ? ` · ${String(t.size[0]*10).replace('.', ',')} × ${String(t.size[1]*10).replace('.', ',')} × ${String(t.size[2]*10).replace('.', ',')} mm` : ''}</span><button class="btn small" data-act="dev-zdef">Standardhöjd</button></div>
     ${t.kind === 'camera' || t.kind === 'wedge' ? `<div class="grid2">${nf('Riktning °', 'dev:a', d.a)}${cam ? nf('Lutning nedåt °', 'dev:tilt', d.tilt, 'min="-30" max="90"') : '<div></div>'}</div>
     <div class="row"><button class="btn small" data-act="dev-rot--15">↺ 15°</button><button class="btn small" data-act="dev-rot-15">↻ 15°</button></div>` : ''}
   </section>`;
@@ -233,6 +251,7 @@ HOOKS.act.push(a => {
   const d = devById(sel.id); if (!d) return false;
   if (a.startsWith('dev-rot')){ pushUndo(); d.a = (((d.a + num(a.slice(8))) % 360) + 360) % 360; devChanged(); renderInspector(); return true; }
   if (a === 'dev-dup'){ dupDevice(d); return true; }
+  if (a === 'dev-zdef'){ pushUndo(); let door = null; const sn = wallSnap({ x:d.x, y:d.y }, 40, devDepth(DT(d))); if (sn) door = sn.door; d.z = r1(DT(d).zDef(ceilingAt(d.x, d.y), door)); devChanged(); renderInspector(); return true; }
   return false;
 });
 
@@ -276,8 +295,12 @@ function buildDevices3D(){
       const housing = new THREE.Mesh(new THREE.BoxGeometry(16, 8, 8), mat('#f2f2f0')); housing.position.x = 4;
       const lens = new THREE.Mesh(new THREE.CylinderGeometry(2.6, 2.6, 2, 16).rotateZ(Math.PI/2), dark); lens.position.x = 12.5;
       const head = new THREE.Group(); head.add(housing, lens); head.rotation.set(0, -rad(d.a), -rad(d.tilt || 0), 'YXZ');
-      const mount = new THREE.Mesh(new THREE.CylinderGeometry(1.5, 1.5, 8, 8), body); mount.position.y = 4;
-      g.add(head, mount);
+      // wall bracket back to the wall
+      const arm = new THREE.Group(); arm.rotation.y = -rad(d.a);
+      const bracket = new THREE.Mesh(new THREE.BoxGeometry(7, 3, 3), mat('#e8e8e6')); bracket.position.x = -3.5;
+      const plate = new THREE.Mesh(new THREE.BoxGeometry(1, 9, 9), mat('#e8e8e6')); plate.position.x = -6.5;
+      arm.add(bracket, plate);
+      g.add(head, arm);
       // frustum outline
       const f = camFov(d), L = Math.min(doriDist(d, 25), 3000), hw = Math.tan(rad(f.h)/2)*L, hh = Math.tan(rad(f.v)/2)*L;
       const pts = [[0, 0, 0], [L, hh, hw], [0, 0, 0], [L, hh, -hw], [0, 0, 0], [L, -hh, hw], [0, 0, 0], [L, -hh, -hw], [L, hh, hw], [L, hh, -hw], [L, hh, -hw], [L, -hh, -hw], [L, -hh, -hw], [L, -hh, hw], [L, -hh, hw], [L, hh, hw]];
@@ -285,9 +308,15 @@ function buildDevices3D(){
       const lm = new THREE.LineBasicMaterial({ color:t.color, transparent:true, opacity:0.55 }); lm.userData.own = true;
       const lines = new THREE.LineSegments(lg, lm); lines.rotation.copy(head.rotation); lines.userData.frustum = true; g.add(lines);
     } else {
-      const m = new THREE.Mesh(t.ceiling ? new THREE.CylinderGeometry(6, 6, 4, 18) : new THREE.BoxGeometry(8, 11, 4), body);
-      if (!t.ceiling) m.rotation.y = -rad(d.a) + Math.PI/2;
-      g.add(m);
+      const [W, H, D] = t.size, bm = mat(t.body || WHITE);
+      const inner = new THREE.Group(); inner.rotation.y = Math.PI/2 - rad(d.a); // local +z = front, facing direction a
+      const m = new THREE.Mesh(t.round ? new THREE.CylinderGeometry(W/2, W/2, H, 24) : new THREE.BoxGeometry(W, H, D), bm);
+      inner.add(m);
+      if (t.screen){ const scr = new THREE.Mesh(new THREE.BoxGeometry(W*0.62, H*0.34, 0.2), mat('#263238')); scr.position.set(0, H*0.18, D/2 + 0.1); inner.add(scr); }
+      // a coloured stripe shows the device type
+      const tag = new THREE.Mesh(new THREE.BoxGeometry(Math.min(W*0.5, 3), Math.min(H*0.12, 0.8), 0.2), mat(t.color)); tag.position.set(0, -H*0.38, (t.round ? W/2 : D/2) + 0.1);
+      if (t.mount !== 'ceiling') inner.add(tag);
+      g.add(inner);
     }
     g.traverse(o => { if (o.isMesh) o.castShadow = false; });
     devG.add(g);

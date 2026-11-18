@@ -28,6 +28,12 @@ header{display:flex;flex-wrap:wrap;align-items:center;gap:10px 14px}
 .brand small{font-family:var(--f-mono);font-weight:400;font-size:11px;color:var(--muted)}
 #projName{font:inherit;font-size:13px;border:1px solid transparent;background:transparent;color:var(--ink);padding:4px 6px;border-radius:var(--r);min-width:0;width:170px}
 #projName:hover,#projName:focus{border-color:var(--line);background:var(--field);outline:none}
+.pmeta{font-family:var(--f-mono);font-size:11px;color:var(--muted);white-space:nowrap;cursor:default}
+.plist{display:grid;gap:6px;max-height:55vh;overflow:auto}
+.prow{display:flex;flex-wrap:wrap;gap:6px 12px;align-items:center;justify-content:space-between;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--field)}
+.prow.cur{border-color:var(--accent)}
+.prow .pinfo{display:grid;gap:2px;min-width:0;flex:1 1 260px}
+.prow .pinfo b{font-weight:600}
 .seg{display:inline-flex;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:2px}
 .seg button{border:0;background:transparent;color:var(--muted);font:inherit;font-weight:500;padding:6px 12px;border-radius:6px;cursor:pointer}
 .seg button[aria-pressed="true"]{background:var(--ink);color:var(--panel)}

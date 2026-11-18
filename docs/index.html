@@ -42,6 +42,12 @@ header{display:flex;flex-wrap:wrap;align-items:center;gap:10px 14px}
 .brand small{font-family:var(--f-mono);font-weight:400;font-size:11px;color:var(--muted)}
 #projName{font:inherit;font-size:13px;border:1px solid transparent;background:transparent;color:var(--ink);padding:4px 6px;border-radius:var(--r);min-width:0;width:170px}
 #projName:hover,#projName:focus{border-color:var(--line);background:var(--field);outline:none}
+.pmeta{font-family:var(--f-mono);font-size:11px;color:var(--muted);white-space:nowrap;cursor:default}
+.plist{display:grid;gap:6px;max-height:55vh;overflow:auto}
+.prow{display:flex;flex-wrap:wrap;gap:6px 12px;align-items:center;justify-content:space-between;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--field)}
+.prow.cur{border-color:var(--accent)}
+.prow .pinfo{display:grid;gap:2px;min-width:0;flex:1 1 260px}
+.prow .pinfo b{font-weight:600}
 .seg{display:inline-flex;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:2px}
 .seg button{border:0;background:transparent;color:var(--muted);font:inherit;font-weight:500;padding:6px 12px;border-radius:6px;cursor:pointer}
 .seg button[aria-pressed="true"]{background:var(--ink);color:var(--panel)}
@@ -169,6 +175,7 @@ input[type=range]{width:100%;accent-color:var(--accent)}
   <header>
     <div class="brand">Hemplan 3D <small>cm</small></div>
     <input id="projName" type="text" aria-label="Projektnamn" value="Min lägenhet">
+    <span class="pmeta" id="projMeta"></span>
     <div class="seg" role="group" aria-label="Vy">
       <button id="vPlan" aria-pressed="true">Planritning</button>
       <button id="v3d" aria-pressed="false">3D-vy</button>
@@ -181,7 +188,7 @@ input[type=range]{width:100%;accent-color:var(--accent)}
       <button class="btn primary" id="bShare">Dela länk</button>
       <button class="btn" id="bExport">Exportera</button>
       <button class="btn" id="bImport">Importera</button>
-      <button class="btn" id="bNew">Ny</button>
+      <button class="btn" id="bNew">Projekt</button>
     </div>
   </header>
   <div class="banner" id="shareBanner" hidden></div>
@@ -637,6 +644,7 @@ function normalizeState(o){
   o.openings = Array.isArray(o.openings) ? o.openings : [];
   o.floorPaint = Array.isArray(o.floorPaint) ? o.floorPaint : [];
   o.views = Array.isArray(o.views) ? o.views : [];
+  o.meta = Object.assign({ id:newPid(), created:Date.now(), modified:Date.now(), rev:1 }, o.meta || {});
   o.library = Array.isArray(o.library) ? o.library : [];
   const hadHeight = o.settings && o.settings.height;
   o.settings = Object.assign({}, d.settings, o.settings || {});
@@ -649,18 +657,37 @@ function normalizeState(o){
   return o;
 }
 
-let saveTimer = 0, saveWarned = false;
+/* ---------- projects: several plans saved in this browser ----------
+   localStorage: <key>.index = list of projects, <key>.current = open project, <key>.p.<id> = the plan.
+   IndexedDB: large images, keyed <project id>:ul and <project id>:v:<view id>. */
+const IDX_KEY = STORE_KEY + '.index', CUR_KEY = STORE_KEY + '.current', PKEY = id => STORE_KEY + '.p.' + id;
+function newPid(){ return uid() + uid(); }
+let projects = [], saveTimer = 0, saveWarned = false, lastSig = null;
+function loadIndex(){ try { projects = JSON.parse(localStorage.getItem(IDX_KEY) || '[]'); if (!Array.isArray(projects)) projects = []; } catch { projects = []; } }
+function saveIndex(){ try { localStorage.setItem(IDX_KEY, JSON.stringify(projects)); } catch {} }
+const entryOf = st => ({ id:st.meta.id, name:st.name || 'Namnlöst', created:st.meta.created, modified:st.meta.modified, rev:st.meta.rev, exportedAt:st.meta.exportedAt || null, exportedRev:st.meta.exportedRev || null });
+function updateIndex(){ const e = entryOf(S), i = projects.findIndex(p => p.id === e.id); if (i >= 0) projects[i] = e; else projects.push(e); saveIndex(); }
+// What counts as a change: everything except where you stand and look, and the time of day
+const contentSig = () => JSON.stringify(S, (k, v) => (k.startsWith('_') || k === 'src' || k === 'viewer' || k === 'meta') ? undefined : v);
+async function persist(){
+  if (sharedMode || !S) return;
+  const sig = contentSig();
+  if (lastSig !== null && sig !== lastSig){ S.meta.rev++; S.meta.modified = Date.now(); }
+  lastSig = sig;
+  const idbOk = await saveImages();
+  try { localStorage.setItem(PKEY(S.meta.id), serialize(!idbOk)); }
+  catch (e) {
+    try { localStorage.setItem(PKEY(S.meta.id), serialize(false)); if (!saveWarned){ toast('Bilderna är för stora för att sparas i webbläsaren. Exportera för att behålla dem.'); saveWarned = true; } } catch {}
+  }
+  try { localStorage.setItem(CUR_KEY, S.meta.id); } catch {}
+  updateIndex(); projMeta();
+}
 function scheduleSave(){
   if (sharedMode) return;
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(async () => {
-    const idbOk = await saveImages();
-    try { localStorage.setItem(STORE_KEY, serialize(!idbOk)); }
-    catch (e) {
-      try { localStorage.setItem(STORE_KEY, serialize(false)); if (!saveWarned) { toast('Bilderna är för stora för att sparas i webbläsaren. Exportera för att behålla dem.'); saveWarned = true; } } catch {}
-    }
-  }, 400);
+  saveTimer = setTimeout(persist, 400);
 }
+async function flushSave(){ clearTimeout(saveTimer); await persist(); }
 // Large images (floor plan, window views) are kept in IndexedDB; the plan itself in localStorage.
 const IMGDB = {};
 function idbOpen(){
@@ -670,25 +697,94 @@ function idbOpen(){
 async function idbPut(k, v){ const db = await idbOpen(); if (!db) throw new Error('no idb'); await new Promise((res, rej) => { const t = db.transaction('img', 'readwrite'), st = t.objectStore('img'); if (v == null) st.delete(k); else st.put(v, k); t.oncomplete = res; t.onerror = () => rej(t.error); }); }
 async function idbGet(k){ const db = await idbOpen(); if (!db) return null; return new Promise(res => { try { const r = db.transaction('img').objectStore('img').get(k); r.onsuccess = () => res(r.result ?? null); r.onerror = () => res(null); } catch { res(null); } }); }
 const savedImgs = new Map();
-function imageEntries(){ const m = new Map(); if (S.underlay) m.set('ul', S.underlay.src || null); (S.views || []).forEach(v => m.set('v:' + v.id, v.src || null)); return m; }
+const imgKeys = st => { const pid = st.meta.id, m = new Map(); if (st.underlay) m.set(pid + ':ul', st.underlay.src || null); (st.views || []).forEach(v => m.set(pid + ':v:' + v.id, v.src || null)); return m; };
 async function saveImages(){
-  let ok = true; const imgs = imageEntries();
+  let ok = true; const imgs = imgKeys(S);
   for (const [k, src] of imgs){ if (src && savedImgs.get(k) !== src){ try { await idbPut(k, src); savedImgs.set(k, src); } catch { ok = false; } } }
   for (const k of [...savedImgs.keys()]) if (!imgs.has(k)){ savedImgs.delete(k); idbPut(k, null).catch(() => {}); }
   return ok;
 }
+// Images of plans saved before projects existed live under the old keys ('ul', 'v:<id>')
 async function hydrateImages(){
-  let changed3 = false;
-  if (S.underlay && !S.underlay.src){ const v = await idbGet('ul'); if (v){ S.underlay.src = v; savedImgs.set('ul', v); reqPlan(); syncSettingsUI(); renderTools(); } }
-  for (const v of S.views || []){ if (!v.src){ const d = await idbGet('v:' + v.id); if (d){ v.src = d; savedImgs.set('v:' + v.id, d); changed3 = true; } } else savedImgs.set('v:' + v.id, v.src); }
-  if (S.underlay?.src) savedImgs.set('ul', S.underlay.src);
+  const pid = S.meta.id, legacy = S.meta.legacyImages; let changed3 = false;
+  if (S.underlay && !S.underlay.src){ let v = await idbGet(pid + ':ul'); const fromNew = !!v; if (!v && legacy) v = await idbGet('ul');
+    if (v){ S.underlay.src = v; if (fromNew) savedImgs.set(pid + ':ul', v); reqPlan(); syncSettingsUI(); renderTools(); } }
+  else if (S.underlay?.src) savedImgs.set(pid + ':ul', S.underlay.src);
+  for (const v of S.views || []){
+    const k = pid + ':v:' + v.id;
+    if (!v.src){ let d = await idbGet(k); const fromNew = !!d; if (!d && legacy) d = await idbGet('v:' + v.id); if (d){ v.src = d; if (fromNew) savedImgs.set(k, d); changed3 = true; } }
+    else savedImgs.set(k, v.src);
+  }
   renderViews(); if (changed3) buildViews();
+  if (legacy){ delete S.meta.legacyImages; scheduleSave(); }
+}
+function readProject(id){ try { const o = JSON.parse(localStorage.getItem(PKEY(id)) || 'null'); return validState(o) ? o : null; } catch { return null; } }
+// Load a plan as the open project
+function useState(st, fit = true){
+  S = normalizeState(st); sel = null; undoStack.length = 0; redoStack.length = 0; savedImgs.clear(); lastSig = contentSig(); ulBlob = null;
+  afterLoad(fit); hydrateImages(); projMeta();
+}
+async function openProject(id){
+  if (S && !sharedMode) await flushSave();
+  const st = readProject(id); if (!st){ toast('Projektet kunde inte läsas.'); return; }
+  useState(st); try { localStorage.setItem(CUR_KEY, id); } catch {}
+}
+async function newProject(example){
+  if (S && !sharedMode) await flushSave();
+  const st = defaultState(); st.meta = { id:newPid(), created:Date.now(), modified:Date.now(), rev:1 };
+  if (!example){ st.walls = []; st.openings = []; st.furniture = []; st.name = 'Nytt projekt'; st.viewer = { x:200, y:200, a:-90 }; }
+  st.library = S ? S.library : []; // your own furniture follows along
+  useState(st); await persist();
+  if (!example){ setTool('room'); toast('Nytt projekt. Rita rum med verktyget Rum eller ladda upp en planritning.'); }
+}
+async function deleteProject(id){
+  const st = id === S.meta.id ? S : readProject(id);
+  if (st) for (const k of imgKeys(Object.assign({}, st, { meta:Object.assign({}, st.meta || {}, { id }) })).keys()) idbPut(k, null).catch(() => {});
+  try { localStorage.removeItem(PKEY(id)); } catch {}
+  projects = projects.filter(p => p.id !== id); saveIndex();
+  if (id === S.meta.id){ if (projects.length) await openProjectNoSave(projects[0].id); else await newProject(true); }
+}
+async function openProjectNoSave(id){ const st = readProject(id); if (st){ useState(st); try { localStorage.setItem(CUR_KEY, id); } catch {} } }
+async function duplicateProject(id){
+  await flushSave();
+  const st = id === S.meta.id ? JSON.parse(serialize(true)) : readProject(id); if (!st) return;
+  const old = st.meta.id; st.meta = { id:newPid(), created:Date.now(), modified:Date.now(), rev:1 }; st.name = (st.name || 'Projekt') + ' (kopia)';
+  // copy images that only exist in IndexedDB
+  if (st.underlay && !st.underlay.src) st.underlay.src = await idbGet(old + ':ul');
+  for (const v of st.views || []) if (!v.src) v.src = await idbGet(old + ':v:' + v.id);
+  useState(st); await persist();
+}
+const fmtTime = t => t ? new Date(t).toLocaleString('sv-SE', { year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' }) : '–';
+function projMeta(){
+  const el = $('#projMeta'); if (!el || !S) return;
+  const m = S.meta, exp = m.exportedRev ? (m.exportedRev === m.rev ? ' · exporterad' : ` · ändrad efter export (v${m.exportedRev})`) : '';
+  el.textContent = sharedMode ? 'delad, sparas inte' : `v${m.rev}${exp}`;
+  el.title = sharedMode ? '' : `Version ${m.rev}. Senast ändrad ${fmtTime(m.modified)}. ${m.exportedAt ? 'Senast exporterad ' + fmtTime(m.exportedAt) + ' (version ' + m.exportedRev + ').' : 'Aldrig exporterad.'}`;
+}
+function openProjects(){
+  const rows = () => [...projects].sort((a, b) => b.modified - a.modified).map(p => `<div class="prow ${p.id === S.meta.id ? 'cur' : ''}" data-pid="${p.id}">
+      <div class="pinfo"><b>${esc(p.name)}</b>${p.id === S.meta.id ? ' <span class="pill on">öppet</span>' : ''}
+        <span class="hint">Version ${p.rev} · ändrad ${fmtTime(p.modified)} · ${p.exportedAt ? `exporterad ${fmtTime(p.exportedAt)} (v${p.exportedRev})` : 'aldrig exporterad'}</span></div>
+      <div class="row">${p.id === S.meta.id ? '' : '<button class="btn small" data-pa="open">Öppna</button>'}<button class="btn small" data-pa="dup">Duplicera</button><button class="btn small danger" data-pa="del">Ta bort</button></div></div>`).join('');
+  const m = modal(`<b>Projekt i den här webbläsaren</b>
+    <div class="plist" id="plist">${rows()}</div>
+    <div class="row"><button class="btn primary" id="pNew">Nytt tomt projekt</button><button class="btn" id="pNewEx">Nytt från exempel</button><button class="btn" data-close>Stäng</button></div>
+    <div class="hint">Projekten sparas bara i den här webbläsaren. Exportera för att flytta dem till en annan enhet eller ha en säkerhetskopia. Versionsnumret ökar för varje ändring, så du kan jämföra en exporterad fil med det som finns här.</div>`);
+  m.querySelector('.card').style.width = 'min(680px, 100%)';
+  $('#plist', m).addEventListener('click', async e => {
+    const b = e.target.closest('[data-pa]'); if (!b) return; const id = b.closest('[data-pid]').dataset.pid;
+    if (b.dataset.pa === 'open'){ m.remove(); await openProject(id); toast('Öppnade ' + (S.name || 'projektet') + '.'); }
+    if (b.dataset.pa === 'dup'){ m.remove(); await duplicateProject(id); toast('Kopian är öppen.'); }
+    if (b.dataset.pa === 'del') confirmBtn(b, 'Ta bort för gott?', async () => { await deleteProject(id); $('#plist', m).innerHTML = rows(); });
+  });
+  $('#pNew', m).addEventListener('click', async () => { m.remove(); await newProject(false); });
+  $('#pNewEx', m).addEventListener('click', async () => { m.remove(); await newProject(true); });
 }
 
 /* undo */
 const undoStack = [], redoStack = [];
 function pushUndo(){ undoStack.push(serialize(false)); if (undoStack.length > 120) undoStack.shift(); redoStack.length = 0; updUndo(); }
-function restoreSnap(json){ const src = S.underlay?.src, vs = new Map((S.views || []).map(v => [v.id, v.src])); S = normalizeState(JSON.parse(json)); if (S.underlay && src && !S.underlay.src) S.underlay.src = src; S.views.forEach(v => { if (!v.src && vs.get(v.id)) v.src = vs.get(v.id); }); afterLoad(false); }
+function restoreSnap(json){ const src = S.underlay?.src, vs = new Map((S.views || []).map(v => [v.id, v.src])), meta = S.meta; S = normalizeState(JSON.parse(json)); S.meta = meta; if (S.underlay && src && !S.underlay.src) S.underlay.src = src; S.views.forEach(v => { if (!v.src && vs.get(v.id)) v.src = vs.get(v.id); }); afterLoad(false); }
 function undo(){ if (!undoStack.length) return; redoStack.push(serialize(false)); restoreSnap(undoStack.pop()); updUndo(); scheduleSave(); }
 function redo(){ if (!redoStack.length) return; undoStack.push(serialize(false)); restoreSnap(redoStack.pop()); updUndo(); scheduleSave(); }
 function updUndo(){ $('#bUndo').disabled = !undoStack.length; $('#bRedo').disabled = !redoStack.length; }
@@ -1459,7 +1555,7 @@ function renderInspector0(){
 }
 function helpHTML(){
   return `<section class="sec"><div class="insp-title"><span class="kind">Inget markerat</span></div>
-    <div class="hint">${S.name === 'Exempellägenhet' ? 'Det här är en exempellägenhet. Ladda upp din egen planritning till vänster, eller rita med verktygen Vägg och Rum. Klicka på <b>Ny</b> för att börja från tomt.' : 'Markera en vägg, öppning eller möbel för att ändra den.'}</div></section>
+    <div class="hint">${S.name === 'Exempellägenhet' ? 'Det här är en exempellägenhet. Ladda upp din egen planritning till vänster, eller rita med verktygen Vägg och Rum. Under <b>Projekt</b> kan du skapa ett nytt, tomt projekt.' : 'Markera en vägg, öppning eller möbel för att ändra den.'}</div></section>
   <section class="sec"><h3>Kortkommandon</h3><dl class="keys">
     <dt><kbd>R</kbd> / <kbd>⇧R</kbd></dt><dd>Vrid möbel 90° åt höger / vänster</dd>
     <dt><kbd>Del</kbd></dt><dd>Ta bort markerat</dd>
@@ -2484,7 +2580,10 @@ function confirmBtn(btn, label, fn){
 }
 function modal(html){ const m = document.createElement('div'); m.className = 'modal'; m.innerHTML = `<div class="card">${html}</div>`; document.body.appendChild(m); m.addEventListener('click', e => { if (e.target === m || e.target.closest('[data-close]')) m.remove(); }); return m; }
 async function exportFile(){
-  const data = JSON.stringify({ app:'hemplan3d', version:1, exported:new Date().toISOString(), state:JSON.parse(serialize(true)) });
+  await flushSave();
+  S.meta.exportedAt = Date.now(); S.meta.exportedRev = S.meta.rev;
+  const data = JSON.stringify({ app:'hemplan3d', version:2, exported:new Date(S.meta.exportedAt).toISOString(), project:{ id:S.meta.id, name:S.name, rev:S.meta.rev, modified:S.meta.modified }, state:JSON.parse(serialize(true)) });
+  persist();
   const fname = (S.name || 'lagenhet').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase() + '.hemplan.json';
   await saveFile(fname, data, 'Exporterad som ' + fname);
 }
@@ -2503,7 +2602,33 @@ function importData(text){
   let o; try { o = JSON.parse(text); } catch { toast('Filen kunde inte läsas som JSON.'); return; }
   const st = o?.state || o;
   if (!validState(st)){ toast('Det här ser inte ut som en Hemplan-fil.'); return; }
-  pushUndo(); S = normalizeState(st); sel = null; ulBlob = null; afterLoad(true); scheduleSave(); toast('Importerad: ' + (S.name || 'lägenhet'));
+  importDialog(st, o.exported ? Date.parse(o.exported) : (st.meta?.exportedAt || null));
+}
+function importDialog(st, exportedAt){
+  const fm = st.meta || {}, same = fm.id && projects.find(p => p.id === fm.id);
+  const cmp = !same ? '' : (fm.rev || 0) > same.rev ? '<b>Filen är nyare</b> än versionen i webbläsaren.' : (fm.rev || 0) < same.rev ? '<b>Filen är äldre</b> än versionen i webbläsaren.' : 'Filen har <b>samma version</b> som den i webbläsaren.';
+  const m = modal(`<b>Importera ${esc(st.name || 'projekt')}</b>
+    <div class="hint">I filen: ${fm.rev ? `version ${fm.rev}, ändrad ${fmtTime(fm.modified)}` : 'ingen versionsinformation (exporterad från en äldre version av appen)'}${exportedAt ? `, exporterad ${fmtTime(exportedAt)}` : ''}.</div>
+    ${same ? `<div class="hint">I webbläsaren: “${esc(same.name)}”, version ${same.rev}, ändrad ${fmtTime(same.modified)}. ${cmp}</div>` : ''}
+    <label class="f inline"><input type="radio" name="impMode" value="new" ${same ? '' : 'checked'}> Importera som nytt projekt</label>
+    <label class="f inline"><input type="radio" name="impMode" value="replace" ${same ? 'checked' : ''}> Ersätt projektet</label>
+    <select id="impTarget">${[...projects].sort((a, b) => b.modified - a.modified).map(p => `<option value="${p.id}" ${(same ? p.id === same.id : p.id === S.meta.id) ? 'selected' : ''}>${esc(p.name)} · v${p.rev} · ${fmtTime(p.modified)}</option>`).join('')}</select>
+    <div class="row"><button class="btn primary" id="impOk">Importera</button><button class="btn" data-close>Avbryt</button></div>`);
+  $('#impOk', m).addEventListener('click', async () => {
+    const mode = m.querySelector('[name=impMode]:checked').value, target = $('#impTarget', m).value;
+    await flushSave();
+    const nst = JSON.parse(JSON.stringify(st));
+    nst.meta = Object.assign({ created:Date.now(), modified:Date.now(), rev:1 }, fm, { exportedAt:exportedAt || fm.exportedAt || null, exportedRev:fm.rev || null });
+    if (mode === 'new'){ nst.meta.id = newPid(); if (projects.some(p => p.name === nst.name)) nst.name += ' (importerad)'; }
+    else {
+      const old = target === S.meta.id ? S : readProject(target);
+      if (old) for (const k of imgKeys(Object.assign({}, old, { meta:{ id:target } })).keys()) idbPut(k, null).catch(() => {});
+      nst.meta.id = target;
+    }
+    delete nst.meta.legacyImages;
+    m.remove(); useState(nst); lastSig = contentSig(); await persist();
+    toast((mode === 'new' ? 'Importerad som nytt projekt: ' : 'Ersatt: ') + (S.name || 'projekt'));
+  });
 }
 $('#bExport').addEventListener('click', exportFile);
 $('#bImport').addEventListener('click', () => {
@@ -2512,9 +2637,7 @@ $('#bImport').addEventListener('click', () => {
   $('#impGo', m).addEventListener('click', () => { const v = $('#impTa', m).value.trim(); if (v){ importData(v); m.remove(); } });
 });
 $('#fImport').addEventListener('change', async e => { const f = e.target.files[0]; e.target.value = ''; if (f) importData(await f.text()); });
-$('#bNew').addEventListener('click', e => confirmBtn(e.currentTarget, 'Rensa allt?', () => {
-  pushUndo(); const keepLib = S.library; S = defaultState(); S.walls = []; S.openings = []; S.furniture = []; S.library = keepLib; S.name = 'Min lägenhet'; S.viewer = { x:200, y:200, a:-90 }; sel = null; afterLoad(true); scheduleSave(); setTool('room'); toast('Tomt. Rita rum med verktyget Rum eller ladda upp en planritning.');
-}));
+$('#bNew').addEventListener('click', openProjects);
 $('#bUndo').addEventListener('click', undo); $('#bRedo').addEventListener('click', redo);
 
 /* ============================== sharing ============================== */
@@ -2534,7 +2657,7 @@ async function unpack(d){
   if (d.enc === 'gz64'){ const bin = atob(d.z), u = Uint8Array.from(bin, c => c.charCodeAt(0)); return JSON.parse(await new Response(new Blob([u]).stream().pipeThrough(new DecompressionStream('gzip'))).text()); }
   return JSON.parse(d.z);
 }
-function shareSnapshot(){ const o = JSON.parse(serialize(false)); delete o.underlay; delete o.library; delete o.shareId; o.views = []; return o; }
+function shareSnapshot(){ const o = JSON.parse(serialize(false)); delete o.underlay; delete o.library; delete o.shareId; delete o.meta; o.views = []; return o; }
 const shareLink = id => APP_URL + '#hem-' + id;
 function openShare(){
   const m = modal(`<b>Dela din möblerade lägenhet</b>
@@ -2574,17 +2697,18 @@ function banner(text, actions = []){
 $('#shareBanner').addEventListener('click', e => {
   const b = e.target.closest('[data-ban]'); if (!b) return;
   if (b.dataset.ban === 'mine') leaveShared();
-  if (b.dataset.ban === 'copy') confirmBtn(b, 'Ersätt min egen lägenhet?', () => {
-    sharedMode = null; S.name = (S.name || 'Lägenhet') + ' (kopia)'; delete S.shareId; $('#projName').value = S.name;
+  if (b.dataset.ban === 'copy'){
+    sharedMode = null; S.name = (S.name || 'Lägenhet') + ' (kopia)'; delete S.shareId; S.meta = { id:newPid(), created:Date.now(), modified:Date.now(), rev:1 }; $('#projName').value = S.name;
     try { history.replaceState(null, '', location.pathname + location.search); } catch { location.hash = ''; }
-    scheduleSave(); banner(''); toast('Sparad som din egen lägenhet i den här webbläsaren.');
-  });
+    lastSig = contentSig(); persist(); banner(''); toast('Sparad som ett nytt projekt i den här webbläsaren.');
+  }
 });
 function leaveShared(){
   sharedMode = null; banner('');
   try { history.replaceState(null, '', location.pathname + location.search); } catch { location.hash = ''; }
-  let loaded = null; try { const raw = localStorage.getItem(STORE_KEY); if (raw){ const o = JSON.parse(raw); if (validState(o)) loaded = o; } } catch {}
-  S = loaded ? normalizeState(loaded) : defaultState(); sel = null; undoStack.length = 0; redoStack.length = 0; afterLoad(true); hydrateImages();
+  loadIndex(); const id = (() => { try { return localStorage.getItem(CUR_KEY); } catch { return null; } })();
+  const st = (id && readProject(id)) || (projects[0] && readProject(projects[0].id));
+  if (st) useState(st); else newProject(true);
 }
 async function checkHash(){
   const m = location.hash.match(/^#hem-([a-z0-9]{4,40})$/i);
@@ -2608,7 +2732,7 @@ window.addEventListener('hashchange', checkHash);
 
 /* ============================== boot ============================== */
 function afterLoad(fit){
-  rebuildAll(); syncSettingsUI(); renderTools(); renderLibrary(); renderInspector(); renderSwatches(); syncSunUI(); updUndo(); renderViews(); runHooks('afterLoad'); applyCollapse($('#left'));
+  rebuildAll(); syncSettingsUI(); renderTools(); renderLibrary(); renderInspector(); renderSwatches(); syncSunUI(); updUndo(); renderViews(); runHooks('afterLoad'); applyCollapse($('#left')); projMeta();
   if (fit) fitPlan();
 }
 let last = performance.now();
@@ -2626,9 +2750,15 @@ function start(snapshot){
   init3D();
   let loaded = null;
   if (snapshot && validState(snapshot)) loaded = snapshot;
-  else { try { const raw = localStorage.getItem(STORE_KEY); if (raw){ const o = JSON.parse(raw); if (validState(o)) loaded = o; } } catch {} }
-  S = loaded ? normalizeState(loaded) : defaultState();
-  afterLoad(false); hydrateImages();
+  loadIndex();
+  if (!loaded){ try { const id = localStorage.getItem(CUR_KEY); if (id) loaded = readProject(id); } catch {} }
+  if (!loaded && projects[0]) loaded = readProject(projects[0].id);
+  if (!loaded && !projects.length){
+    // first start with projects: move a plan saved by the earlier one-plan version into a project
+    try { const raw = localStorage.getItem(STORE_KEY); if (raw){ const o = JSON.parse(raw); if (validState(o)){ loaded = o; o.meta = { id:newPid(), created:Date.now(), modified:Date.now(), rev:1, legacyImages:true }; } } } catch {}
+  }
+  useState(loaded || defaultState(), false);
+  persist();
   requestAnimationFrame(() => { fitPlan(); requestAnimationFrame(loop); });
   if (!ok3d){ $('#v3d').disabled = true; $('#vWalk').disabled = true; }
   matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', () => { reqPlan(); setSky(); });
