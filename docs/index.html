@@ -162,6 +162,7 @@ input[type=range]{width:100%;accent-color:var(--accent)}
   .panel{overflow:visible}
 }
 @media (prefers-reduced-motion: reduce){ *{transition:none!important} }
+
 </style>
 
 <div class="app">
@@ -196,7 +197,6 @@ input[type=range]{width:100%;accent-color:var(--accent)}
         </div>
         <div class="hint" id="toolHint"></div>
       </section>
-
       <section class="sec">
         <h3>Färg på väggar och golv</h3>
         <div class="row"><input type="color" id="brush" aria-label="Penselfärg"><input type="text" id="brushText" style="flex:1" aria-label="Penselfärg som hex eller namn"></div>
@@ -338,7 +338,14 @@ input[type=range]{width:100%;accent-color:var(--accent)}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script>
 (() => {
+(() => {
 'use strict';
+// Which build this is. build.py replaces the object between the markers for each variant.
+const VARIANT = /*@VARIANT*/{"id": "home", "title": "Hemplan 3D", "appUrl": "https://claude.ai/artifact/SQ6qEdbTfwtsJMcC3HZ4Ze", "storeKey": "hemplan3d.v1", "idb": "hemplan3d", "collapseKey": "hemplan3d.collapsed", "templates": "templates.json"}/*@END*/;
+// Extension points. The home build leaves them empty; the work build (src/work/work.js) adds cameras and alarm devices through them.
+const HOOKS = { normalize:[], afterLoad:[], planUnder:[], planOver:[], hit:[], toolClick:[], inspector:[], field:[], act:[], del:[], dup:[], key:[], build:[], frame:[], view:[], tools:[], select:[], preframe:[] };
+const runHooks = (k, ...a) => { for (const f of HOOKS[k]) f(...a); };
+const firstHook = (k, ...a) => { for (const f of HOOKS[k]){ const r = f(...a); if (r) return r; } return null; };
 /* ============================== helpers ============================== */
 const $ = (s, r = document) => r.querySelector(s);
 const uid = () => Math.random().toString(36).slice(2, 9);
@@ -594,8 +601,8 @@ function sanitizeDef(d){
 }
 
 /* ============================== state ============================== */
-const STORE_KEY = 'hemplan3d.v1';
-const APP_URL = 'https://claude.ai/artifact/SQ6qEdbTfwtsJMcC3HZ4Ze';
+const STORE_KEY = VARIANT.storeKey;
+const APP_URL = VARIANT.appUrl;
 let S, sharedMode = null;
 function defaultState(){
   const W = (ax, ay, bx, by, t, h = 250) => ({ id:uid(), a:{x:ax,y:ay}, b:{x:bx,y:by}, t, h });
@@ -617,6 +624,7 @@ function defaultState(){
   add(genWallBed(160,45,225,'#f2f1ec'), 35, 330, 270);
   add(genBed(160,200,'#d9d4ca'), 725, 118, 0);
   add(genWardrobe(100,60,200,'#ffffff'), 857, 320, 90);
+  runHooks('normalize', st);
   return st;
 }
 function makeInstance(def, x, y, rot = 0){
@@ -637,6 +645,7 @@ function normalizeState(o){
   o.viewer = Object.assign({}, d.viewer, o.viewer || {});
   o.sun = Object.assign(defaultSun(), o.sun || {}); o.north = Number.isFinite(+o.north) ? +o.north : 0;
   o.furniture.forEach(f => { f.j = f.j || {}; f.elev = f.elev || 0; });
+  runHooks('normalize', o);
   return o;
 }
 
@@ -656,7 +665,7 @@ function scheduleSave(){
 const IMGDB = {};
 function idbOpen(){
   if (IMGDB.p) return IMGDB.p;
-  return (IMGDB.p = new Promise(res => { try { const r = indexedDB.open('hemplan3d', 1); r.onupgradeneeded = () => r.result.createObjectStore('img'); r.onsuccess = () => res(r.result); r.onerror = () => res(null); } catch { res(null); } }));
+  return (IMGDB.p = new Promise(res => { try { const r = indexedDB.open(VARIANT.idb, 1); r.onupgradeneeded = () => r.result.createObjectStore('img'); r.onsuccess = () => res(r.result); r.onerror = () => res(null); } catch { res(null); } }));
 }
 async function idbPut(k, v){ const db = await idbOpen(); if (!db) throw new Error('no idb'); await new Promise((res, rej) => { const t = db.transaction('img', 'readwrite'), st = t.objectStore('img'); if (v == null) st.delete(k); else st.put(v, k); t.oncomplete = res; t.onerror = () => rej(t.error); }); }
 async function idbGet(k){ const db = await idbOpen(); if (!db) return null; return new Promise(res => { try { const r = db.transaction('img').objectStore('img').get(k); r.onsuccess = () => res(r.result ?? null); r.onerror = () => res(null); } catch { res(null); } }); }
@@ -830,6 +839,7 @@ function buildWalls(){
   scene3d = { cx, cy, W, H };
   updateSun(); buildViews();
   scheduleFloor();
+  runHooks('build');
 }
 const doorDir = (w, side, along, open) => { const g = wg(w), th = clamp(open ?? 1, 0, 1)*Math.PI/2; return { x: Math.cos(th)*g.ux*along + Math.sin(th)*g.nx*side, y: Math.cos(th)*g.uy*along + Math.sin(th)*g.ny*side }; };
 function setDoorAngle(o){ const e = doorGroups.get(o.id); if (!e) return; const d = doorDir(e.w, e.side, e.along, o.open); e.grp.rotation.y = -Math.atan2(d.y, d.x); }
@@ -1073,6 +1083,7 @@ function drawPlan(){
       ctx.fillStyle = '#1b201e'; ctx.fillText(label, sx(f.x), sy(f.y)+0.5);
     }
   });
+  runHooks('planUnder', ctx, col);
   // walls
   S.walls.forEach(w => {
     const g = wg(w), e = wallExt(w), t2 = w.t/2;
@@ -1138,6 +1149,7 @@ function drawPlan(){
     ctx.font = `600 12px ${css('--f-mono')}`; ctx.fillStyle = col.accent; ctx.fillText(`${fmt(Math.abs(b.x-a.x))} × ${fmt(Math.abs(b.y-a.y))}`, sx((a.x+b.x)/2), sy((a.y+b.y)/2)); }
   if (tool === 'calib'){ ctx.strokeStyle = col.accent; ctx.fillStyle = col.accent; ctx.lineWidth = 2; const pts = calib.pts.concat(calib.pts.length === 1 && cursorW ? [cursorW] : []);
     pts.forEach(p => { ctx.beginPath(); ctx.arc(sx(p.x), sy(p.y), 4, 0, 7); ctx.fill(); }); if (pts.length === 2){ ctx.beginPath(); ctx.moveTo(sx(pts[0].x), sy(pts[0].y)); ctx.lineTo(sx(pts[1].x), sy(pts[1].y)); ctx.stroke(); } }
+  runHooks('planOver', ctx, col);
   // viewer marker
   const v = S.viewer, vx = sx(v.x), vy = sy(v.y);
   ctx.save(); ctx.translate(vx, vy); ctx.rotate(rad(v.a));
@@ -1182,6 +1194,7 @@ const pointers = new Map();
 function evW(e){ const r = planCv.getBoundingClientRect(); return { x:wx(e.clientX - r.left), y:wy(e.clientY - r.top), px:e.clientX - r.left, py:e.clientY - r.top }; }
 function hitTest(p){
   const tolPx = 6/pv.z;
+  const hk = firstHook('hit', p); if (hk) return hk;
   if (sel?.kind === 'furn'){ const f = furnById(sel.id); if (f){ const h = rotHandle(f); if (Math.hypot(h.x - p.px, h.y - p.py) < 11) return { kind:'rot', f }; } }
   if (sel?.kind === 'wall'){ const w = wallById(sel.id); if (w) for (const e of ['a','b']) if (Math.hypot(sx(w[e].x)-p.px, sy(w[e].y)-p.py) < 10) return { kind:'end', w, e }; }
   if (Math.hypot(sx(S.viewer.x)-p.px, sy(S.viewer.y)-p.py) < 12) return { kind:'viewer' };
@@ -1199,7 +1212,7 @@ function hitTest(p){
   for (const w of S.walls){ const r = segDist(p, w.a, w.b); if (r.d < w.t/2 + tolPx) return { kind:'wall', w }; }
   return null;
 }
-function select(s){ sel = s; renderInspector(); reqPlan(); }
+function select(s){ sel = s; renderInspector(); reqPlan(); runHooks('select', s); }
 
 planCv.addEventListener('pointerdown', e => {
   planCv.setPointerCapture(e.pointerId);
@@ -1214,6 +1227,7 @@ planCv.addEventListener('pointerdown', e => {
   if (tool !== 'select'){ drag = { kind:'click', ...start, cx:pv.cx, cy:pv.cy }; return; }
   const h = hitTest(p);
   if (!h){ drag = { kind:'pan', ...start, cx:pv.cx, cy:pv.cy, deselect:true }; return; }
+  if (h.kind === 'custom'){ h.down?.(); drag = { ...start, ...h }; return; }
   if (h.kind === 'rot') drag = { kind:'rot', f:h.f, ...start };
   else if (h.kind === 'end') drag = { kind:'end', pts:[h.w[h.e], ...endsAt(h.w[h.e], h.w)], w:h.w, ...start };
   else if (h.kind === 'viewer') drag = { kind:'viewer', ...start, ox:S.viewer.x, oy:S.viewer.y };
@@ -1245,6 +1259,7 @@ planCv.addEventListener('pointermove', e => {
     case 'ulmove': S.underlay.x = r1(drag.ox + (p.x - drag.x)); S.underlay.y = r1(drag.oy + (p.y - drag.y)); break;
     case 'furn': { once(); const f = drag.f; f.x = r1(drag.ox + (p.x - drag.x)); f.y = r1(drag.oy + (p.y - drag.y)); if (!e.altKey){ f.x = Math.round(f.x); f.y = Math.round(f.y); } updateFurnPose(f); break; }
     case 'rot': { once(); const f = drag.f; let a = deg(Math.atan2(p.y - f.y, p.x - f.x)) - 90; const st = e.altKey ? 1 : (e.shiftKey ? 45 : 15); f.rot = ((Math.round(a/st)*st) % 360 + 360) % 360; updateFurnPose(f); break; }
+    case 'custom': drag.move?.(p, e, once); break;
     case 'viewer': S.viewer.x = r1(drag.ox + (p.x - drag.x)); S.viewer.y = r1(drag.oy + (p.y - drag.y)); break;
     case 'north': { once(); const c = compassPos(); let a = deg(Math.atan2(p.px - c.x, -(p.py - c.y))); const st = e.altKey ? 1 : 5; S.north = ((Math.round(a/st)*st) % 360 + 360) % 360; $('#sunNorth').value = S.north; updateSun(); buildViews(); break; }
     case 'open': { once(); const G = wg(drag.w); const r = segDist(p, drag.w.a, drag.w.b); drag.o.off = clamp(Math.round(r.s/ (e.altKey?1:g))*(e.altKey?1:g), drag.o.w/2, G.len - drag.o.w/2); buildWalls(); break; }
@@ -1257,6 +1272,7 @@ function endDrag(e){
   if (!drag) return;
   const d = drag; drag = null;
   if (d.kind === 'pinch') return;
+  if (d.kind === 'custom'){ d.end?.(d.moved); reqPlan(); return; }
   const p = evW(e);
   if (!d.moved){
     if (d.kind === 'pan' && d.deselect) select(null);
@@ -1287,6 +1303,7 @@ planCv.addEventListener('wheel', e => {
 }, { passive:false });
 
 function toolClick(p, e, raw){
+  if (firstHook('toolClick', tool, p, raw, e)) return;
   if (tool === 'wall'){
     const pts = wallDraw.pts;
     if (pts.length){
@@ -1345,6 +1362,7 @@ function renderTools(){
   $('#tools').innerHTML = TOOLS.filter(t => !['paintwall','paintfloor'].includes(t[0]) && (!['calib','ulmove'].includes(t[0]) || S.underlay)).map(([k, n]) => `<button class="tool" data-tool="${k}" aria-pressed="${tool===k}">${IC[k]}<span>${n}</span></button>`).join('');
   document.querySelectorAll('.tool.wide[data-tool]').forEach(b => b.setAttribute('aria-pressed', b.dataset.tool === tool));
   const t = TOOLS.find(t => t[0] === tool); $('#toolName').textContent = t ? t[1] : ''; $('#toolHint').textContent = t ? t[2] : '';
+  runHooks('tools');
 }
 $('#tools').addEventListener('click', e => { const b = e.target.closest('[data-tool]'); if (b) setTool(b.dataset.tool); });
 function setTool(t){ tool = t; wallDraw.pts = []; wallDraw.typed = ''; roomDraw = null; if (t === 'calib'){ calib.pts = []; calib.measured = 0; } renderTools(); showTip(); if (t === 'calib') renderInspector(); reqPlan(); if (view !== 'plan' && !['select','paintwall','paintfloor'].includes(t)) setView('plan'); }
@@ -1374,6 +1392,7 @@ function renderInspector0(){
     return;
   }
   if (!sel){ insp.innerHTML = helpHTML(); return; }
+  const hi = firstHook('inspector', sel); if (hi){ insp.innerHTML = hi; return; }
   if (sel.kind === 'furn'){
     const f = furnById(sel.id); if (!f){ sel = null; return renderInspector(); }
     const joints = f.def.joints || [];
@@ -1465,6 +1484,7 @@ insp.addEventListener('click', e => { const b = e.target.closest('[data-act]'); 
 function onField(el, ev){
   const k = el.dataset.k; if (!k) return;
   const v = el.value;
+  if (firstHook('field', k, v, ev, el)) return;
   if (k === 'lenMode'){ lenMode = v; return; }
   if (sel?.kind === 'furn'){
     const f = furnById(sel.id); if (!f) return;
@@ -1504,6 +1524,7 @@ function onField(el, ev){
   }
 }
 function onAct(a){
+  if (firstHook('act', a)) return;
   if (a === 'tool-select'){ setTool('select'); renderInspector(); return; }
   if (a === 'calib-apply'){
     const real = num($('#calLen')?.value, 0); if (!(real > 0) || !calib.measured) return;
@@ -1560,6 +1581,7 @@ function setWallLength(w, L, mode){
 }
 function deleteSel(){
   if (!sel) return; pushUndo();
+  if (firstHook('del', sel)){ sel = null; changed(); renderInspector(); return; }
   if (sel.kind === 'furn'){ removeFurnObj(sel.id); S.furniture = S.furniture.filter(f => f.id !== sel.id); }
   else if (sel.kind === 'wall'){ S.walls = S.walls.filter(w => w.id !== sel.id); S.openings = S.openings.filter(o => o.wall !== sel.id); buildWalls(); }
   else if (sel.kind === 'open'){ S.openings = S.openings.filter(o => o.id !== sel.id); buildWalls(); }
@@ -1831,7 +1853,7 @@ function onViewField(e, commit){
 }
 
 /* ============================== collapsible panel sections ============================== */
-const COLL_KEY = 'hemplan3d.collapsed';
+const COLL_KEY = VARIANT.collapseKey;
 let collapsed = new Set(); try { collapsed = new Set(JSON.parse(localStorage.getItem(COLL_KEY) || '[]')); } catch {}
 const secKey = h => ([...h.childNodes].find(n => n.nodeType === 3 && n.textContent.trim())?.textContent || h.textContent).trim().toLowerCase();
 function applyCollapse(root = document){
@@ -1929,7 +1951,7 @@ async function loadShared(){
     } catch {}
   } else if (!window.claude?.use){
     sharedSource = 'file';
-    try { const r = await fetch('templates.json', { cache:'no-cache' }); if (r.ok){ const j = await r.json(); SHARED = (j.items || []).map(d => { try { return sanitizeDef(d); } catch { return null; } }).filter(Boolean); } } catch {}
+    try { const r = await fetch(VARIANT.templates, { cache:'no-cache' }); if (r.ok){ const j = await r.json(); SHARED = (j.items || []).map(d => { try { return sanitizeDef(d); } catch { return null; } }).filter(Boolean); } } catch {}
   }
   renderLibrary();
 }
@@ -2049,7 +2071,7 @@ async function initAI(){
     }
   } catch {}
   aiPill();
-  if (!window.claude?.use) $('#bShare').hidden = true;
+  if (!window.claude?.use) $('#bShare').hidden = true; // share links need Claude's storage
 }
 function aiErr(e){
   const c = e?.code;
@@ -2228,6 +2250,7 @@ function setView(v){
   if (v !== 'plan' && !ok3d){ toast('3D kräver WebGL, som inte är tillgängligt i den här webbläsaren.'); return; }
   if (view === 'walk' && document.pointerLockElement) document.exitPointerLock?.();
   if (v !== 'walk') walk.seated = null;
+  runHooks('view', v);
   if (viewsG) viewsG.visible = v === 'walk';
   view = v;
   $('#vPlan').setAttribute('aria-pressed', v === 'plan'); $('#v3d').setAttribute('aria-pressed', v === '3d'); $('#vWalk').setAttribute('aria-pressed', v === 'walk');
@@ -2418,6 +2441,7 @@ document.addEventListener('keydown', e => {
   if (mod) return;
   if (e.code === 'KeyL' && !e.shiftKey && !e.altKey){ toggleRoomLights(); return; }
   if (e.code === 'KeyD' && !e.shiftKey && !e.altKey && sel?.kind === 'furn' && !(tool === 'wall' && wallDraw.pts.length)){ e.preventDefault(); const f = furnById(sel.id); if (f) duplicate(f); return; }
+  if (firstHook('key', e)) return;
   if (tool === 'wall' && wallDraw.pts.length){
     if (/^[0-9]$/.test(e.key) || e.key === ',' || e.key === '.'){ wallDraw.typed += e.key === '.' ? ',' : e.key; reqPlan(); e.preventDefault(); return; }
     if (e.key === 'Backspace' && wallDraw.typed){ wallDraw.typed = wallDraw.typed.slice(0, -1); reqPlan(); e.preventDefault(); return; }
@@ -2581,9 +2605,10 @@ async function checkHash(){
 }
 window.addEventListener('hashchange', checkHash);
 
+
 /* ============================== boot ============================== */
 function afterLoad(fit){
-  rebuildAll(); syncSettingsUI(); renderTools(); renderLibrary(); renderInspector(); renderSwatches(); syncSunUI(); updUndo(); renderViews(); applyCollapse($('#left'));
+  rebuildAll(); syncSettingsUI(); renderTools(); renderLibrary(); renderInspector(); renderSwatches(); syncSunUI(); updUndo(); renderViews(); runHooks('afterLoad'); applyCollapse($('#left'));
   if (fit) fitPlan();
 }
 let last = performance.now();
@@ -2592,7 +2617,9 @@ function loop(t){
   const dt = Math.min(0.05, (t - last)/1000); last = t;
   stepAnims(dt);
   if (sunPlaying){ S.sun.time += dt*1.2; if (S.sun.time >= 24){ S.sun.time = 24; sunPlaying = false; $('#sunPlay').textContent = '▶'; scheduleSave(); } updateSun(); }
+  if (ok3d) runHooks('preframe', dt);
   if (view !== 'plan' && ok3d){ if (view === 'walk') stepWalk(dt); else stepOrbit(); renderer.render(scene, cam); }
+  runHooks('frame', dt);
   if (planDirty && view === 'plan') drawPlan();
 }
 function start(snapshot){
@@ -2613,6 +2640,7 @@ function start(snapshot){
 }
 const hot = window.claude?.hot;
 if (hot?.ready) hot.ready(d => start(d?.state)); else start(hot?.data?.state);
+})();
 })();
 </script>
 
