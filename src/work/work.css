@@ -27,3 +27,8 @@
 .sdrow .dm{font-family:var(--f-mono);font-size:10.5px;color:var(--muted)}
 .sdrow select{font-size:12px;padding:3px 5px}
 #siteTools .tool.wide{font-size:11.5px;padding:6px 4px}
+.pglist{display:grid;gap:6px;max-height:60vh;overflow:auto}
+.pgrow{display:grid;grid-template-columns:120px minmax(0,1fr);gap:12px;align-items:start;padding:8px;border:1px solid var(--line);border-radius:8px;background:var(--field)}
+.pgrow img{width:120px;height:auto;border:1px solid var(--line);border-radius:4px;background:#fff}
+.pginfo{display:grid;gap:6px;min-width:0;font-size:12.5px}
+@media (max-width:600px){ .pgrow{grid-template-columns:1fr} .pgrow img{width:100%} }

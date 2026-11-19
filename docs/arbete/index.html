@@ -201,6 +201,11 @@ input[type=range]{width:100%;accent-color:var(--accent)}
 .sdrow .dm{font-family:var(--f-mono);font-size:10.5px;color:var(--muted)}
 .sdrow select{font-size:12px;padding:3px 5px}
 #siteTools .tool.wide{font-size:11.5px;padding:6px 4px}
+.pglist{display:grid;gap:6px;max-height:60vh;overflow:auto}
+.pgrow{display:grid;grid-template-columns:120px minmax(0,1fr);gap:12px;align-items:start;padding:8px;border:1px solid var(--line);border-radius:8px;background:var(--field)}
+.pgrow img{width:120px;height:auto;border:1px solid var(--line);border-radius:4px;background:#fff}
+.pginfo{display:grid;gap:6px;min-width:0;font-size:12.5px}
+@media (max-width:600px){ .pgrow{grid-template-columns:1fr} .pgrow img{width:100%} }
 
 </style>
 
@@ -2840,7 +2845,8 @@ window.addEventListener('blur', () => { keys.clear(); spaceDown = false; });
 
 /* ============================== zoom/fit ============================== */
 function fitPlan(){
-  const bb = wallsBBox(), W = planCv.clientWidth || 800, H = planCv.clientHeight || 600;
+  let bb = wallsBBox(); const W = planCv.clientWidth || 800, H = planCv.clientHeight || 600;
+  if (!S.walls.length && S.underlay){ const u = S.underlay, w = (u.natW || 1000)*u.cmPerPx, h = (u.natH || 700)*u.cmPerPx; bb = { minx:u.x, miny:u.y, maxx:u.x + w, maxy:u.y + h }; }
   pv.cx = (bb.minx + bb.maxx)/2; pv.cy = (bb.miny + bb.maxy)/2;
   pv.z = clamp(Math.min((W - 80)/(bb.maxx - bb.minx || 1), (H - 80)/(bb.maxy - bb.miny || 1)), 0.05, 6); reqPlan();
 }
@@ -3419,9 +3425,8 @@ async function loadPdfJs(){
   // loading the worker as an ordinary script makes pdf.js run in the page (no separate worker file needed)
   if (!window.pdfjsWorker) await loadScript(PDFJS + 'pdf.worker.min.js');
 }
-async function readPdf(data, onStep){
-  const pdf = await pdfjsLib.getDocument({ data }).promise;
-  const page = await pdf.getPage(1), view = page.view;
+async function readPdf(pdf, pageNo, onStep){
+  const page = await pdf.getPage(pageNo), view = page.view;
   onStep('Läser lager…');
   const groups = {}; try { const oc = await pdf.getOptionalContentConfig(); for (const [id, g] of Object.entries(oc?.getGroups() || {})) groups[id] = g.name || id; } catch {}
   const ol = await page.getOperatorList(), O = pdfjsLib.OPS;
@@ -3444,7 +3449,7 @@ async function readPdf(data, onStep){
     else if (f === O.setLineWidth) lw = a[0];
     else if (f === O.setStrokeRGBColor) sc = typeof a[0] === 'string' ? a[0] : '#' + Array.from(a).slice(0, 3).map(v => Math.round(+v).toString(16).padStart(2, '0')).join(''); // pdf.js gives 0–255
     else if (f === O.setStrokeGray) sc = '#' + Math.round(+a[0]*255).toString(16).padStart(2, '0').repeat(3);
-    else if (f === O.beginMarkedContentProps) ocStack.push(a[0] === 'OC' && a[1]?.id ? (groups[a[1].id] || a[1].id) : null);
+    else if (f === O.beginMarkedContentProps) ocStack.push(a[0] === 'OC' && a[1]?.id && groups[a[1].id] ? groups[a[1].id] : null); // layers without a name are grouped by line style
     else if (f === O.beginMarkedContent) ocStack.push(null);
     else if (f === O.endMarkedContent) ocStack.pop();
     else if (f === O.constructPath){
@@ -3473,7 +3478,7 @@ async function readPdf(data, onStep){
   const cx = cv.getContext('2d'); cx.fillStyle = '#fff'; cx.fillRect(0, 0, cv.width, cv.height);
   await page.render({ canvasContext:cx, viewport:vp }).promise;
   const img = cv.toDataURL('image/jpeg', 0.82);
-  return { view, layers, texts, img, named:Object.keys(groups).length > 0 };
+  return { view, layers, texts, img, named:Object.values(layers).some(L => L.named) };
 }
 
 /* ---------- line helpers ---------- */
@@ -3550,14 +3555,106 @@ async function importSitePdf(file){
   if (siteBusy) return; siteBusy = true;
   try {
     st.textContent = 'Laddar PDF-läsaren…'; await loadPdfJs();
-    const r = await readPdf(new Uint8Array(await file.arrayBuffer()), m => { st.textContent = m; });
+    const pdf = await pdfjsLib.getDocument({ data:new Uint8Array(await file.arrayBuffer()) }).promise;
+    if (pdf.numPages > 1){ await pagesDialog(file.name, pdf, m => { st.textContent = m; }); st.textContent = ''; return; }
+    const r = await readPdf(pdf, 1, m => { st.textContent = m; });
     st.textContent = '';
     siteDialog(file.name, r);
   } catch (e) { st.className = 'status err'; st.textContent = 'PDF:en kunde inte läsas: ' + (e?.message || e); }
   finally { siteBusy = false; }
 }
-function siteDialog(fname, r){
-  const scale = detectScale(r.texts), nums = parseNums(r.texts), plus = nums.filter(n => n.plus).map(n => n.v);
+/* ---------- multi-page PDFs: one page is the site plan, others are floor plans ---------- */
+async function renderPage(pdf, n, maxPx, q = 0.85){
+  const page = await pdf.getPage(n), v = page.view, sc = Math.min(4, maxPx/Math.max(v[2] - v[0], v[3] - v[1])), vp = page.getViewport({ scale:sc });
+  const cv = document.createElement('canvas'); cv.width = Math.round(vp.width); cv.height = Math.round(vp.height);
+  const cx = cv.getContext('2d'); cx.fillStyle = '#fff'; cx.fillRect(0, 0, cv.width, cv.height);
+  await page.render({ canvasContext:cx, viewport:vp }).promise;
+  return { src:cv.toDataURL('image/jpeg', q), w:cv.width, h:cv.height, pxPerPt:sc };
+}
+const PAGE_SITE = /situationsplan|markplan|tomtplan|nybyggnadskarta|marksektion|terr[äa]ng|jorddjup/i;
+const PAGE_FLOOR = /(^|\s)(plan\s*\d|plan\s*[0-9]+\s*tr|entr[ée]plan|bottenv[åa]ning|bottenplan|souterr[äa]ng|k[äa]llare|vindsplan|vind|[öo]vervåning|v[åa]ningsplan|v[åa]ning\s*\d|planritning)/i;
+async function pagesDialog(fname, pdf, onStep){
+  const pages = [], n = Math.min(pdf.numPages, 40);
+  for (let i = 1; i <= n; i++){
+    onStep(`Förhandsvisar sida ${i} av ${n}…`);
+    const page = await pdf.getPage(i), tc = await page.getTextContent();
+    const texts = tc.items.filter(t => t.str && t.str.trim()).map(t => ({ s:t.str, h:Math.hypot(t.transform[2], t.transform[3]) }));
+    const all = texts.map(t => t.s).join(' ');
+    const big = [...texts].sort((a, b) => b.h - a.h).map(t => t.s.trim()).find(t => PAGE_SITE.test(t) || PAGE_FLOOR.test(t)) || '';
+    const role = PAGE_SITE.test(all) ? 'site' : PAGE_FLOOR.test(all) ? 'floor' : 'skip';
+    const th = await renderPage(pdf, i, 240, 0.7);
+    pages.push({ n:i, scale:detectScale(texts.map(t => ({ s:t.s }))), title:big.slice(0, 40), role, thumb:th.src });
+  }
+  // only one page can be the site plan
+  let seen = false; pages.forEach(p => { if (p.role === 'site'){ if (seen) p.role = 'skip'; seen = true; } });
+  // floor pages go to existing floors that have no floor plan image yet, then to new floors
+  const free = floorsSorted().filter(f => !f.underlay).map(f => f.id);
+  pages.forEach(p => { p.target = p.role === 'floor' ? (free.shift() || 'new') : 'new'; });
+  const floorOpts = sel2 => floorsSorted().map(f => `<option value="${f.id}" ${sel2 === f.id ? 'selected' : ''}>${esc(f.name)}</option>`).join('') + `<option value="new" ${sel2 === 'new' ? 'selected' : ''}>Ny våning</option>`;
+  const m = modal(`<b>Importera ${esc(fname)}</b>
+    <div class="hint">${pdf.numPages} sidor${pdf.numPages > n ? ` (de första ${n} visas)` : ''}. Välj vilken sida som är situationsplanen med terräng och vilka sidor som är våningsplan. Ett våningsplan läggs som planritning under våningen, i rätt skala.</div>
+    <div class="pglist">${pages.map((p, i) => `<div class="pgrow" data-pg="${i}">
+      <img src="${p.thumb}" alt="Sida ${p.n}">
+      <div class="pginfo"><b>Sida ${p.n}</b>${p.title ? ` · ${esc(p.title)}` : ''}
+        <div class="grid2">
+          <label class="f">Används som<select data-pr="role"><option value="skip" ${p.role === 'skip' ? 'selected' : ''}>Hoppa över</option><option value="site" ${p.role === 'site' ? 'selected' : ''}>Situationsplan / terräng</option><option value="floor" ${p.role === 'floor' ? 'selected' : ''}>Våningsplan</option></select></label>
+          <label class="f">Skala 1:<input type="number" data-pr="scale" value="${p.scale || ''}" placeholder="t.ex. 100" min="10"></label>
+        </div>
+        <label class="f" ${p.role === 'floor' ? '' : 'hidden'} data-pr-floor>Våning<select data-pr="target">${floorOpts(p.target)}</select></label>
+        <label class="f" ${p.role === 'floor' && p.target === 'new' ? '' : 'hidden'} data-pr-name>Namn på ny våning<input type="text" data-pr="name" value="${esc(p.title || '')}" placeholder="t.ex. Plan 2"></label>
+      </div></div>`).join('')}</div>
+    <div class="row"><button class="btn primary" id="pgOk">Fortsätt</button><button class="btn" data-close>Avbryt</button></div>
+    <div class="status" id="pgSt"></div>`);
+  m.querySelector('.card').style.width = 'min(760px, 100%)';
+  const sync = row => { const role = row.querySelector('[data-pr=role]').value, tgt = row.querySelector('[data-pr=target]').value; row.querySelector('[data-pr-floor]').hidden = role !== 'floor'; row.querySelector('[data-pr-name]').hidden = !(role === 'floor' && tgt === 'new'); };
+  // a page switched to "floor plan" gets a floor no other page uses yet, else a new floor with a unique name
+  const assign = row => {
+    const taken = new Set([...m.querySelectorAll('.pgrow')].filter(r => r !== row && r.querySelector('[data-pr=role]').value === 'floor').map(r => r.querySelector('[data-pr=target]').value));
+    const free2 = floorsSorted().find(f => !f.underlay && !taken.has(f.id));
+    row.querySelector('[data-pr=target]').value = free2 ? free2.id : 'new';
+    const nm = row.querySelector('[data-pr=name]');
+    if (!free2 && !nm.value){ const names = new Set([...S.floors.map(f => f.name), ...[...m.querySelectorAll('[data-pr=name]')].filter(x => x !== nm).map(x => x.value)]); let k = S.floors.length + 1; while (names.has('Plan ' + k)) k++; nm.value = 'Plan ' + k; }
+  };
+  m.querySelector('.pglist').addEventListener('change', e => { const row = e.target.closest('.pgrow'); if (!row) return;
+    if (e.target.dataset.pr === 'role' && e.target.value === 'site') m.querySelectorAll('.pgrow [data-pr=role]').forEach(o => { if (o !== e.target && o.value === 'site') { o.value = 'skip'; sync(o.closest('.pgrow')); } });
+    if (e.target.dataset.pr === 'role' && e.target.value === 'floor') assign(row);
+    if (e.target.dataset.pr === 'target' && e.target.value === 'new') assign2(row);
+    sync(row); });
+  const assign2 = row => { const nm = row.querySelector('[data-pr=name]'); if (!nm.value){ const names = new Set([...S.floors.map(f => f.name), ...[...m.querySelectorAll('[data-pr=name]')].filter(x => x !== nm).map(x => x.value)]); let k = S.floors.length + 1; while (names.has('Plan ' + k)) k++; nm.value = 'Plan ' + k; } };
+  $('#pgOk', m).addEventListener('click', async () => {
+    const rows = [...m.querySelectorAll('.pgrow')].map(r => ({ p:pages[+r.dataset.pg], role:r.querySelector('[data-pr=role]').value, scale:num(r.querySelector('[data-pr=scale]').value, 0), target:r.querySelector('[data-pr=target]').value, name:r.querySelector('[data-pr=name]').value.trim() }));
+    const bad = rows.find(r => r.role !== 'skip' && !(r.scale > 0));
+    if (bad){ $('#pgSt', m).className = 'status err'; $('#pgSt', m).textContent = `Ange skalan för sida ${bad.p.n}. Den står oftast i ritningshuvudet.`; return; }
+    const st = $('#pgSt', m); st.className = 'status';
+    try {
+      const floorRows = rows.filter(r => r.role === 'floor');
+      if (floorRows.length) pushUndo();
+      for (const r of floorRows){ st.textContent = `Lägger in sida ${r.p.n} som våningsplan…`; await floorFromPage(pdf, r); }
+      if (floorRows.length){ rebuildAll(); renderFloorUI(); syncSettingsUI(); renderTools(); changed(); }
+      const siteRow = rows.find(r => r.role === 'site');
+      if (siteRow){ st.textContent = `Läser situationsplanen på sida ${siteRow.p.n}…`; const r = await readPdf(pdf, siteRow.p.n, t => { st.textContent = t; }); m.remove(); siteDialog(`${fname}, sida ${siteRow.p.n}`, r, siteRow.scale); }
+      else { m.remove(); setView('plan'); fitPlan(); }
+      if (floorRows.length) toast(`${floorRows.length} ${floorRows.length === 1 ? 'våningsplan är inlagt' : 'våningsplan är inlagda'} som planritning. Passa in dem med Kalibrera och Flytta bild om det behövs, och rita väggarna ovanpå.`);
+    } catch (e) { st.className = 'status err'; st.textContent = 'Det gick inte: ' + (e?.message || e); }
+  });
+}
+// A floor plan page becomes the floor plan image of a floor, at the drawing's scale
+async function floorFromPage(pdf, r){
+  let fl = r.target !== 'new' && S.floors.find(f => f.id === r.target);
+  if (!fl){
+    const top = floorsSorted().pop(), empty = S.floors.length === 1 && !S.floors[0].walls.length && !S.floors[0].underlay ? S.floors[0] : null;
+    if (empty) fl = empty;
+    else { fl = { id:'f' + uid(), name:r.name || ('Plan ' + (S.floors.length + 1)), elev:top.elev + (top._maxH || S.settings.defH) + 30 }; FLOOR_KEYS.forEach(k => { fl[k] = k === 'underlay' ? null : []; }); S.floors.push(fl); }
+    if (r.name) fl.name = r.name.slice(0, 40);
+  }
+  const img = await renderPage(pdf, r.p.n, 4096), cmPerPx = 2.54/72*r.scale/img.pxPerPt;
+  // centre it on the ground floor's walls, or around the origin
+  const g = floorsSorted()[0], b = g.walls.length ? withFloor(g, wallsBBox) : { minx:0, miny:0, maxx:0, maxy:0 };
+  fl.underlay = { src:img.src, x:Math.round((b.minx + b.maxx)/2 - img.w*cmPerPx/2), y:Math.round((b.miny + b.maxy)/2 - img.h*cmPerPx/2), cmPerPx:Math.round(cmPerPx*10000)/10000, opacity:0.55, natW:img.w, natH:img.h };
+  if (!fl.walls.length) S.curFloor = fl.id;
+}
+function siteDialog(fname, r, scaleOverride){
+  const scale = scaleOverride || detectScale(r.texts), nums = parseNums(r.texts), plus = nums.filter(n => n.plus).map(n => n.v);
   const refGuess = plus.length ? Object.entries(plus.reduce((c, v) => (c[v] = (c[v] || 0) + 1, c), {})).sort((a, b) => b[1] - a[1])[0][0] : '';
   const rows = Object.entries(r.layers).map(([name, L]) => ({ name, n:L.polys.length, col:L.col, role:guessRole(name, r.named, L.polys.length, Object.keys(r.layers).length) })).sort((a, b) => (a.role === 'ignore') - (b.role === 'ignore') || b.n - a.n);
   const m = modal(`<b>Importera situationsplan</b>
@@ -3643,7 +3740,7 @@ function estimateContours(){
 /* ---------- terrain ---------- */
 let terrain = null, siteG = null, siteTex = null, siteTexSrc = null, siteImg = null, siteImgSrc = null;
 function terrainSamples(){
-  const s = S.site, out = [], step = 80;
+  const s = S.site, out = [], step = 20;
   s.lines.forEach(l => {
     if (l.role !== 'contour' || l.z == null) return;
     const p = l.pts;
@@ -3653,38 +3750,54 @@ function terrainSamples(){
   s.spots.forEach(sp => { if (!sp.plus){ const q = d2p(sp.x, sp.y); out.push(q.x, q.y, sp.z); } });
   return out;
 }
+// Smooth ground through the contour lines: the contours are fixed and the ground between them is the
+// evenly stretched surface (Laplace), solved coarse-to-fine. No jumps, also with only a few contours.
+function solveLaplace(nx, ny, fixed, val, iters){
+  const N = nx*ny, h = new Float32Array(N);
+  if (nx > 24 && ny > 24){
+    const cx = Math.ceil(nx/2), cy = Math.ceil(ny/2), cf = new Uint8Array(cx*cy), cv = new Float32Array(cx*cy), cc = new Float32Array(cx*cy);
+    for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++){ const k = j*nx + i; if (!fixed[k]) continue; const c = (j >> 1)*cx + (i >> 1); cf[c] = 1; cv[c] += val[k]; cc[c]++; }
+    for (let c = 0; c < cx*cy; c++) if (cc[c]) cv[c] /= cc[c];
+    const ch = solveLaplace(cx, cy, cf, cv, iters);
+    for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++){
+      const k = j*nx + i; if (fixed[k]){ h[k] = val[k]; continue; }
+      const fx = Math.min(cx - 1.001, i/2), fy = Math.min(cy - 1.001, j/2), i0 = Math.floor(fx), j0 = Math.floor(fy), u = fx - i0, v = fy - j0, i1 = Math.min(cx - 1, i0 + 1), j1 = Math.min(cy - 1, j0 + 1);
+      h[k] = ch[j0*cx + i0]*(1-u)*(1-v) + ch[j0*cx + i1]*u*(1-v) + ch[j1*cx + i0]*(1-u)*v + ch[j1*cx + i1]*u*v;
+    }
+  } else {
+    let sum = 0, n = 0; for (let k = 0; k < N; k++) if (fixed[k]){ sum += val[k]; n++; }
+    const m = n ? sum/n : 0; for (let k = 0; k < N; k++) h[k] = fixed[k] ? val[k] : m;
+  }
+  const w = 1.85;
+  for (let it = 0; it < iters; it++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++){
+    const k = j*nx + i; if (fixed[k]) continue;
+    let s2 = 0, c = 0;
+    if (i > 0){ s2 += h[k-1]; c++; } if (i < nx - 1){ s2 += h[k+1]; c++; } if (j > 0){ s2 += h[k-nx]; c++; } if (j < ny - 1){ s2 += h[k+nx]; c++; }
+    h[k] += w*(s2/c - h[k]);
+  }
+  return h;
+}
 function buildTerrain(){
   terrain = null;
   const s = S.site; if (!s || !s.show.terrain) return;
   const sm = terrainSamples(), n = sm.length/3; if (n < 3) return;
   let minx = Infinity, miny = Infinity, maxx = -Infinity, maxy = -Infinity;
   for (let i = 0; i < sm.length; i += 3){ minx = Math.min(minx, sm[i]); maxx = Math.max(maxx, sm[i]); miny = Math.min(miny, sm[i+1]); maxy = Math.max(maxy, sm[i+1]); }
-  const W = maxx - minx, H = maxy - miny, cell = Math.max(50, Math.ceil(Math.max(W, H)/240)), nx = Math.ceil(W/cell) + 1, ny = Math.ceil(H/cell) + 1;
-  const B = cell*4, grid = new Map(), gk = (i, j) => i + ',' + j;
-  for (let i = 0; i < n; i++){ const k = gk(Math.floor((sm[i*3] - minx)/B), Math.floor((sm[i*3+1] - miny)/B)); (grid.get(k) || grid.set(k, []).get(k)).push(i); }
+  // a margin around the contours, and at least the house
+  const g0 = floorsSorted()[0], hb = g0 && g0.walls.length ? withFloor(g0, wallsBBox) : null;
+  if (hb){ minx = Math.min(minx, hb.minx); miny = Math.min(miny, hb.miny); maxx = Math.max(maxx, hb.maxx); maxy = Math.max(maxy, hb.maxy); }
+  const mg = Math.max(maxx - minx, maxy - miny)*0.05; minx -= mg; miny -= mg; maxx += mg; maxy += mg;
+  const W = maxx - minx, H = maxy - miny, cell = Math.max(40, Math.ceil(Math.max(W, H)/260)), nx = Math.ceil(W/cell) + 1, ny = Math.ceil(H/cell) + 1, N = nx*ny;
   if (s.ref == null){
     // no floor height given: use the ground height at the house
-    const g = floorsSorted()[0], b = g && g.walls.length ? withFloor(g, wallsBBox) : null, cx0 = b ? (b.minx + b.maxx)/2 : (minx + maxx)/2, cy0 = b ? (b.miny + b.maxy)/2 : (miny + maxy)/2;
+    const cx0 = hb ? (hb.minx + hb.maxx)/2 : (minx + maxx)/2, cy0 = hb ? (hb.miny + hb.maxy)/2 : (miny + maxy)/2;
     let bz = sm[2], bd = Infinity; for (let i = 0; i < sm.length; i += 3){ const d = Math.hypot(sm[i] - cx0, sm[i+1] - cy0); if (d < bd){ bd = d; bz = sm[i+2]; } }
     s.ref = Math.round(bz*10)/10 + 0.3; setTimeout(() => { renderSitePanel(); toast(`Golvet på Plan 1 är satt till +${fmt(s.ref)} m, strax över marken vid huset. Ändra under Situationsplan och terräng om du vet rätt höjd.`); }, 0);
   }
-  const h = new Float32Array(nx*ny), ref = s.ref;
-  // between two contour lines: weighted by the distance to the nearest sample of each height
-  for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++){
-    const x = minx + i*cell, y = miny + j*cell, bi = Math.floor((x - minx)/B), bj = Math.floor((y - miny)/B);
-    let z1 = null, d1 = Infinity, z2 = null, d2 = Infinity;
-    for (let r = 0; r < 40; r++){
-      for (let a = bi - r; a <= bi + r; a++) for (let b = bj - r; b <= bj + r; b++){
-        if (r && a > bi - r && a < bi + r && b > bj - r && b < bj + r) continue;
-        for (const q of grid.get(gk(a, b)) || []){ const d = Math.hypot(sm[q*3] - x, sm[q*3+1] - y), z = sm[q*3+2];
-          if (d < d1){ if (z1 !== null && Math.abs(z - z1) > 1e-6){ z2 = z1; d2 = d1; } z1 = z; d1 = d; }
-          else if (d < d2 && Math.abs(z - z1) > 1e-6){ z2 = z; d2 = d; } }
-      }
-      if (z1 !== null && (z2 !== null && (r + 1)*B > d2 || (r + 1)*B > d1 + 3000)) break;
-    }
-    const z = z2 === null ? z1 : (z1*d2 + z2*d1)/(d1 + d2);
-    h[j*nx + i] = (z - ref)*100;
-  }
+  const ref = s.ref, fixed = new Uint8Array(N), val = new Float32Array(N), cnt = new Float32Array(N);
+  for (let q = 0; q < n; q++){ const i = Math.round((sm[q*3] - minx)/cell), j = Math.round((sm[q*3+1] - miny)/cell), k = j*nx + i; if (k < 0 || k >= N) continue; fixed[k] = 1; val[k] += (sm[q*3+2] - ref)*100; cnt[k]++; }
+  for (let k = 0; k < N; k++) if (cnt[k]) val[k] /= cnt[k];
+  const h = solveLaplace(nx, ny, fixed, val, 60);
   // keep the ground below the house's floors
   const fls = floorsSorted(), low = fls[0];
   if (low && low.walls.length){
@@ -3813,8 +3926,11 @@ HOOKS.toolDown.push((tl, p) => {
 });
 function applySlope(){
   const s = S.site, a = p2d(slope.a.x, slope.a.y), b = p2d(slope.b.x, slope.b.y), hits = [];
+  let skipped = 0;
   s.lines.forEach(l => {
     if (!['contour', 'other'].includes(l.role) || polyLen(l.pts) < 300) return;
+    // contour lines bend all the time; long straight pieces are site boundaries, road edges and the like
+    if (l.role === 'other'){ let mx = 0; for (let i = 2; i < l.pts.length; i += 2) mx = Math.max(mx, Math.hypot(l.pts[i] - l.pts[i-2], l.pts[i+1] - l.pts[i-1])); if (mx > 800 && polyLen(l.pts)/(l.pts.length/2 - 1) > 400){ if (crosses(l, a, b)) skipped++; return; } }
     const p = l.pts; let tmin = Infinity;
     for (let i = 2; i < p.length; i += 2){ const t = segX(a.x, a.y, b.x, b.y, p[i-2], p[i-1], p[i], p[i+1]); if (t !== null) tmin = Math.min(tmin, t); }
     if (tmin < Infinity) hits.push([tmin, l]);
@@ -3823,9 +3939,10 @@ function applySlope(){
   pushUndo(); hits.sort((x, y) => x[0] - y[0]);
   hits.forEach(([, l], i) => { l.role = 'contour'; l.z = Math.round((s.start + i*s.interval)*100)/100; l.est = false; });
   s.lines.filter(l => l.est).forEach(l => { l.z = null; l.est = false; }); estimateContours();
-  toast(`${hits.length} höjdkurvor fick höjder ${fmt(s.start)}–${fmt(s.start + (hits.length - 1)*s.interval)} m.`);
+  toast(`${hits.length} höjdkurvor fick höjder ${fmt(s.start)}–${fmt(s.start + (hits.length - 1)*s.interval)} m.` + (skipped ? ` ${skipped} långa raka linjer hoppades över (troligen tomtgräns eller vägkant).` : ''));
   siteChanged();
 }
+function crosses(l, a, b){ const p = l.pts; for (let i = 2; i < p.length; i += 2) if (segX(a.x, a.y, b.x, b.y, p[i-2], p[i-1], p[i], p[i+1]) !== null) return true; return false; }
 function segX(ax, ay, bx, by, cx, cy, dx, dy){ const r = bx - ax, s2 = by - ay, u = dx - cx, v = dy - cy, den = r*v - s2*u; if (Math.abs(den) < 1e-9) return null; const t = ((cx - ax)*v - (cy - ay)*u)/den, w = ((cx - ax)*s2 - (cy - ay)*r)/den; return t >= 0 && t <= 1 && w >= 0 && w <= 1 ? t : null; }
 HOOKS.toolClick.push((tl, p, raw) => {
   if (!tl.startsWith('site')) return false;

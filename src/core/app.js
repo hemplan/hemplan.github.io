@@ -2404,7 +2404,8 @@ window.addEventListener('blur', () => { keys.clear(); spaceDown = false; });
 
 /* ============================== zoom/fit ============================== */
 function fitPlan(){
-  const bb = wallsBBox(), W = planCv.clientWidth || 800, H = planCv.clientHeight || 600;
+  let bb = wallsBBox(); const W = planCv.clientWidth || 800, H = planCv.clientHeight || 600;
+  if (!S.walls.length && S.underlay){ const u = S.underlay, w = (u.natW || 1000)*u.cmPerPx, h = (u.natH || 700)*u.cmPerPx; bb = { minx:u.x, miny:u.y, maxx:u.x + w, maxy:u.y + h }; }
   pv.cx = (bb.minx + bb.maxx)/2; pv.cy = (bb.miny + bb.maxy)/2;
   pv.z = clamp(Math.min((W - 80)/(bb.maxx - bb.minx || 1), (H - 80)/(bb.maxy - bb.miny || 1)), 0.05, 6); reqPlan();
 }
